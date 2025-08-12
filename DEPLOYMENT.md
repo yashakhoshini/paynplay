@@ -95,3 +95,4 @@ CASHAPP_HANDLE=$your_cashapp_handle
 - **400 Parse range**: Missing tab - bot will auto-fallback
 - **502 errors**: Check Railway logs - usually missing env vars
 
+

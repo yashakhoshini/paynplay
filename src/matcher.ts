@@ -1,8 +1,6 @@
-import { OwnerAccount, getOpenCashouts, markCashoutMatchedByRow } from './sheets.js';
+import { getOpenCashouts, markCashoutMatchedByRow } from './sheets.js';
 import { OWNER_FALLBACK_THRESHOLD } from './config.js';
-import { MatchResult } from './types.js';
-
-// MatchResult type is now imported from types.ts
+import { MatchResult, OwnerAccount, Method } from './types.js';
 
 export async function findMatch(
   method: string,
@@ -46,11 +44,11 @@ export async function findMatch(
   if (amount >= ownerThreshold || !owner) {
     // fallback to any owner for that method (or first available)
     const fallback = owner || owners[0];
-    if (fallback) return { type: 'OWNER', owner: fallback, amount };
+    if (fallback) return { type: 'OWNER', method, owner: fallback, amount };
   }
 
   // Default to owner if nothing else
-  if (owners.length) return { type: 'OWNER', owner: owners[0], amount };
+  if (owners.length) return { type: 'OWNER', method, owner: owners[0], amount };
   // If truly no owner handle is present, we still return an OWNER type with dummy handle
-  return { type: 'OWNER', owner: { method, handle: '<ask owner for handle>', display_name: 'Owner', instructions: '' }, amount };
+  return { type: 'OWNER', method, owner: { method, handle: '<ask owner for handle>', display_name: 'Owner', instructions: '' }, amount };
 }

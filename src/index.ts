@@ -1,4 +1,4 @@
-import { Bot, session, InlineKeyboard } from "grammy";
+import { Bot, session, InlineKeyboard, Context } from "grammy";
 import express from "express";
 import { webhookCallback } from "grammy";
 import { 
@@ -15,18 +15,23 @@ type SessionData = {
   method?: string;
   amount?: number;
 };
+
+interface MyContext extends Context {
+  session: SessionData;
+}
+
 function initial(): SessionData {
   return {};
 }
 
-const bot = new Bot<SessionData>(BOT_TOKEN);
+const bot = new Bot<MyContext>(BOT_TOKEN);
 bot.use(session({ initial }));
 
 // /ping for quick health check
-bot.command("ping", async (ctx) => ctx.reply("pong ✅"));
+bot.command("ping", async (ctx: MyContext) => ctx.reply("pong ✅"));
 
 // /start handler
-bot.command("start", async (ctx) => {
+bot.command("start", async (ctx: MyContext) => {
   const settings = await getSettings();
   const kb = new InlineKeyboard().text("💸 Buy-In", "BUYIN");
   await ctx.reply(MSG.welcome(settings.CLUB_NAME ?? "our club"), {
@@ -35,7 +40,7 @@ bot.command("start", async (ctx) => {
 });
 
 // Buy-in start
-bot.callbackQuery("BUYIN", async (ctx) => {
+bot.callbackQuery("BUYIN", async (ctx: MyContext) => {
   const settings = await getSettings();
   ctx.session.step = "METHOD";
   const kb = new InlineKeyboard();
@@ -46,7 +51,7 @@ bot.callbackQuery("BUYIN", async (ctx) => {
 });
 
 // Method chosen
-bot.callbackQuery(/METHOD_(.+)/, async (ctx) => {
+bot.callbackQuery(/METHOD_(.+)/, async (ctx: MyContext) => {
   const method = ctx.match[1];
   ctx.session.method = method;
   ctx.session.step = "AMOUNT";
@@ -65,19 +70,19 @@ bot.callbackQuery(/METHOD_(.+)/, async (ctx) => {
 });
 
 // Pre-set amounts
-bot.callbackQuery(/AMT_(\d+)/, async (ctx) => {
+bot.callbackQuery(/AMT_(\d+)/, async (ctx: MyContext) => {
   const amount = parseInt(ctx.match[1], 10);
   ctx.session.amount = amount;
   await handleAmount(ctx);
 });
 
 // Custom amount prompt
-bot.callbackQuery("AMT_CUSTOM", async (ctx) => {
+bot.callbackQuery("AMT_CUSTOM", async (ctx: MyContext) => {
   await ctx.editMessageText(MSG.enterAmount);
 });
 
 // Handle text for custom amount
-bot.on("message:text", async (ctx) => {
+bot.on("message:text", async (ctx: MyContext) => {
   if (ctx.session.step === "AMOUNT") {
     const amt = parseFloat(ctx.message.text.trim());
     if (isNaN(amt) || amt <= 0) {
@@ -89,7 +94,7 @@ bot.on("message:text", async (ctx) => {
   }
 });
 
-async function handleAmount(ctx: any) {
+async function handleAmount(ctx: MyContext) {
   const method = ctx.session.method;
   const amount = ctx.session.amount;
   if (!method || !amount) return;
@@ -117,7 +122,7 @@ async function handleAmount(ctx: any) {
 }
 
 // Mark Paid placeholder
-bot.callbackQuery("MARKPAID", async (ctx) => {
+bot.callbackQuery("MARKPAID", async (ctx: MyContext) => {
   await ctx.answerCallbackQuery({ text: "Marked as paid ✅" });
 });
 
@@ -125,7 +130,7 @@ const app = express();
 app.get("/", (_, res) => res.send("OK"));
 
 if (BASE_URL) {
-  app.use(`/${BOT_TOKEN}`, webhookCallback(bot, "express"));
+  app.use(`/${BOT_TOKEN}`, webhookCallback(bot as any, "express"));
   app.listen(PORT, async () => {
     console.log(`Server on :${PORT}`);
     await bot.api.setWebhook(`${BASE_URL}/${BOT_TOKEN}`);

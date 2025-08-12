@@ -24,7 +24,7 @@ const auth = new google.auth.GoogleAuth({
 
 async function client(): Promise<Sheets> {
   const a = await auth.getClient();
-  return google.sheets({ version: 'v4', auth: a });
+  return google.sheets({ version: 'v4', auth: a as any });
 }
 
 // OwnerAccount type is now imported from types.ts

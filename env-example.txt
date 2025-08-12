@@ -1,0 +1,23 @@
+# Copy this to .env file and fill in your values
+
+# Required Environment Variables
+BOT_TOKEN=your_telegram_bot_token_here
+SHEET_ID=your_google_sheet_id_here
+GOOGLE_CLIENT_EMAIL=your_service_account_email@project.iam.gserviceaccount.com
+GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYour private key here with \n escapes\n-----END PRIVATE KEY-----\n"
+
+# Optional Environment Variables (with defaults)
+BASE_URL=https://your-app.up.railway.app
+PORT=8080
+METHODS_ENABLED_DEFAULT=ZELLE,VENMO,CASHAPP
+CURRENCY_DEFAULT=USD
+FAST_FEE_PCT_DEFAULT=0.02
+OWNER_FALLBACK_THRESHOLD=999999
+OWNER_TG_USERNAME=your_telegram_username
+
+# Owner handles (used if no OwnerAccounts sheet exists)
+ZELLE_HANDLE=your@email.com
+VENMO_HANDLE=@your_venmo_handle
+CASHAPP_HANDLE=$your_cashapp_handle
+
+
