@@ -128,6 +128,7 @@ bot.callbackQuery("MARKPAID", async (ctx: MyContext) => {
 });
 
 const app = express();
+app.use(express.json()); // before mounting webhook
 app.get("/", (_, res) => res.send("OK"));
 
 if (BASE_URL) {
