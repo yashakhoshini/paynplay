@@ -1,0 +1,60 @@
+export type Method = "ZELLE" | "VENMO" | "CASHAPP";
+
+export interface Settings {
+  CLUB_NAME: string;
+  METHODS_ENABLED: Method[];
+  CURRENCY: string;
+  FAST_FEE_PCT: number;
+  OWNER_FALLBACK_THRESHOLD: number;
+  OWNER_TG_USERNAME?: string;
+}
+
+export interface OwnerAccount {
+  method: Method;
+  handle: string;
+  display_name: string;
+  instructions: string;
+}
+
+export interface CashoutRow {
+  cashout_id: string;
+  tg_user_id: string | number;
+  display_name: string;
+  method: Method;
+  amount: number;
+  priority_type: "FAST" | "NORMAL";
+  status: "PENDING" | "MATCHED" | "PAID" | "CANCELLED";
+  requested_at: string;
+  matched_at: string;
+  payer_tg_user_id: string | number | "";
+  payer_handle: string | "";
+  receiver_handle?: string | "";
+  notes?: string;
+}
+
+export interface BuyinRow {
+  buyin_id: string;
+  tg_user_id: string | number;
+  display_name: string;
+  method: Method;
+  amount: number;
+  status: "PENDING" | "MATCHED" | "PAID" | "CANCELLED";
+  assigned_to: string; // "OWNER" | cashout_id | ""
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MatchResultOwnerFallback {
+  type: "OWNER";
+  method: Method;
+  owner: OwnerAccount;
+  amount: number;
+}
+
+export interface MatchResultCashout {
+  type: "CASHOUT";
+  cashout: CashoutRow;
+  amount: number;
+}
+
+export type MatchResult = MatchResultOwnerFallback | MatchResultCashout;
