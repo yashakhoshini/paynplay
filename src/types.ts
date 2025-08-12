@@ -1,4 +1,4 @@
-export type Method = "ZELLE" | "VENMO" | "CASHAPP";
+export type Method = "ZELLE" | "VENMO" | "CASHAPP" | string;
 
 export interface Settings {
   CLUB_NAME: string;

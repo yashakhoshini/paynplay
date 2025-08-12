@@ -25,6 +25,10 @@ export const DEFAULT_CURRENCY = process.env.CURRENCY_DEFAULT || 'USD';
 export const DEFAULT_FAST_FEE = Number(process.env.FAST_FEE_PCT_DEFAULT || '0.02');
 export const OWNER_FALLBACK_THRESHOLD = Number(process.env.OWNER_FALLBACK_THRESHOLD || '999999');
 
+// Google Service Account (required for Sheets access)
+export const GOOGLE_CLIENT_EMAIL = required('GOOGLE_CLIENT_EMAIL');
+export const GOOGLE_PRIVATE_KEY = required('GOOGLE_PRIVATE_KEY').replace(/\\n/g, '\n');
+
 // Optional owner handles (used if no OwnerAccounts sheet)
 export const ZELLE_HANDLE   = process.env.ZELLE_HANDLE   || '';
 export const VENMO_HANDLE   = process.env.VENMO_HANDLE   || '';

@@ -6,13 +6,20 @@ import {
   DEFAULT_FAST_FEE,
   OWNER_FALLBACK_THRESHOLD,
   OWNER_TG_USERNAME,
-  ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE
+  ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE,
+  GOOGLE_CLIENT_EMAIL,
+  GOOGLE_PRIVATE_KEY
 } from './config.js';
+import { OwnerAccount } from './types.js';
 
 type Sheets = sheets_v4.Sheets;
 
 const auth = new google.auth.GoogleAuth({
-  scopes: ['https://www.googleapis.com/auth/spreadsheets']
+  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+  credentials: {
+    client_email: GOOGLE_CLIENT_EMAIL,
+    private_key: GOOGLE_PRIVATE_KEY
+  }
 });
 
 async function client(): Promise<Sheets> {
@@ -20,12 +27,7 @@ async function client(): Promise<Sheets> {
   return google.sheets({ version: 'v4', auth: a });
 }
 
-export type OwnerAccount = {
-  method: 'ZELLE' | 'VENMO' | 'CASHAPP' | string;
-  handle: string;
-  display_name: string;
-  instructions: string;
-};
+// OwnerAccount type is now imported from types.ts
 
 export type Settings = {
   CLUB_NAME: string;

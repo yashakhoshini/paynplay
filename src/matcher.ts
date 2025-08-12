@@ -1,9 +1,8 @@
 import { OwnerAccount, getOpenCashouts, markCashoutMatchedByRow } from './sheets.js';
 import { OWNER_FALLBACK_THRESHOLD } from './config.js';
+import { MatchResult } from './types.js';
 
-export type MatchResult =
-  | { type: 'OWNER'; owner: OwnerAccount; amount: number }
-  | { type: 'CASHOUT'; amount: number; rowIndex: number; method: string; receiver?: string };
+// MatchResult type is now imported from types.ts
 
 export async function findMatch(
   method: string,
@@ -20,7 +19,25 @@ export async function findMatch(
     if (co.method === method && co.amount === amount) {
       // mark matched
       await markCashoutMatchedByRow(co.rowIndex, 'matched');
-      return { type: 'CASHOUT', amount, rowIndex: co.rowIndex, method, receiver: co.receiver_handle };
+      return { 
+        type: 'CASHOUT', 
+        cashout: {
+          cashout_id: co.rowIndex.toString(),
+          tg_user_id: '',
+          display_name: co.username || '',
+          method: co.method as Method,
+          amount: co.amount,
+          priority_type: 'NORMAL',
+          status: 'MATCHED',
+          requested_at: new Date().toISOString(),
+          matched_at: new Date().toISOString(),
+          payer_tg_user_id: '',
+          payer_handle: '',
+          receiver_handle: co.receiver_handle || '',
+          notes: ''
+        },
+        amount 
+      };
     }
   }
 
