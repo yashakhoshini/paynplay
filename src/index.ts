@@ -131,11 +131,22 @@ const app = express();
 app.get("/", (_, res) => res.send("OK"));
 
 if (BASE_URL) {
+  // Add error handling for webhook
+  app.use(`/`, (req, res, next) => {
+    console.log('Webhook received:', req.method, req.url);
+    next();
+  });
+  
   app.use(`/`, webhookCallback(bot as any, "express"));
+  
   app.listen(PORT, async () => {
     console.log(`Server on :${PORT}`);
-    await bot.api.setWebhook(`${BASE_URL}/`);
-    console.log(`Webhook set to ${BASE_URL}/`);
+    try {
+      await bot.api.setWebhook(`${BASE_URL}/`);
+      console.log(`Webhook set to ${BASE_URL}/`);
+    } catch (error) {
+      console.error('Failed to set webhook:', error);
+    }
   });
 } else {
   app.listen(PORT, () => {
