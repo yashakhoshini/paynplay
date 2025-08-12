@@ -147,3 +147,11 @@ if (BASE_URL) {
   app.listen(PORT, () => console.log(`Server on :${PORT}`));
   bot.start();
 }
+
+bot.command("ping", (ctx) => {
+  ctx.reply("pong ✅");
+});
+
+app.get("/", (req, res) => {
+  res.send("Bot server is live 🚀");
+});
