@@ -52,7 +52,8 @@ bot.callbackQuery("BUYIN", async (ctx: MyContext) => {
 
 // Method chosen
 bot.callbackQuery(/METHOD_(.+)/, async (ctx: MyContext) => {
-  const method = ctx.match[1];
+  const method = ctx.match?.[1];
+  if (!method) return;
   ctx.session.method = method;
   ctx.session.step = "AMOUNT";
 
@@ -71,7 +72,7 @@ bot.callbackQuery(/METHOD_(.+)/, async (ctx: MyContext) => {
 
 // Pre-set amounts
 bot.callbackQuery(/AMT_(\d+)/, async (ctx: MyContext) => {
-  const amount = parseInt(ctx.match[1], 10);
+  const amount = parseInt(ctx.match?.[1] || "0", 10);
   ctx.session.amount = amount;
   await handleAmount(ctx);
 });
@@ -83,7 +84,7 @@ bot.callbackQuery("AMT_CUSTOM", async (ctx: MyContext) => {
 
 // Handle text for custom amount
 bot.on("message:text", async (ctx: MyContext) => {
-  if (ctx.session.step === "AMOUNT") {
+  if (ctx.session.step === "AMOUNT" && ctx.message?.text) {
     const amt = parseFloat(ctx.message.text.trim());
     if (isNaN(amt) || amt <= 0) {
       await ctx.reply(MSG.invalidAmount);
