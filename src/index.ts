@@ -1,19 +1,20 @@
-import { Bot, InlineKeyboard, session } from "grammy";
+import { Bot, Context, InlineKeyboard, session, SessionFlavor, webhookCallback } from "grammy";
 import express from "express";
 import { BOT_TOKEN, BASE_URL, PORT } from "./config.js";
 import type { Method } from "./types.js";
 import { getOwnerAccounts, getSettings, appendBuyin, markCashoutMatched } from "./sheets.js";
 import { findMatch } from "./matcher.js";
 
-type FlowState = {
+// ----- Session (state) -----
+type SessionData = {
   step?: "IDLE" | "METHOD" | "AMOUNT";
   method?: Method;
 };
+type MyContext = Context & SessionFlavor<SessionData>;
 
-const bot = new Bot<FlowState>(BOT_TOKEN);
-bot.use(session({ initial: (): FlowState => ({ step: "IDLE" }) }));
-
-const METHODS: Method[] = ["ZELLE", "VENMO", "CASHAPP"];
+// ----- Bot -----
+const bot = new Bot<MyContext>(BOT_TOKEN);
+bot.use(session({ initial: (): SessionData => ({ step: "IDLE" }) }));
 
 // /start
 bot.command("start", async (ctx) => {
@@ -32,7 +33,8 @@ bot.callbackQuery("BUYIN", async (ctx) => {
 });
 
 bot.callbackQuery(/^METHOD_(ZELLE|VENMO|CASHAPP)$/, async (ctx) => {
-  const method = ctx.match![1] as Method;
+  const match = ctx.match as RegExpExecArray;
+  const method = match[1] as Method;
   const settings = await getSettings();
   if (!settings.METHODS_ENABLED.includes(method)) {
     await ctx.answerCallbackQuery({ text: "Method not enabled", show_alert: true });
@@ -49,7 +51,8 @@ bot.callbackQuery(/^METHOD_(ZELLE|VENMO|CASHAPP)$/, async (ctx) => {
 });
 
 bot.callbackQuery(/^AMT_(\d+)$/, async (ctx) => {
-  const amount = Number(ctx.match![1]);
+  const match = ctx.match as RegExpExecArray;
+  const amount = Number(match[1]);
   await handleAmount(ctx, amount);
 });
 
@@ -68,9 +71,12 @@ bot.on("message:text", async (ctx) => {
   await handleAmount(ctx, amount);
 });
 
-async function handleAmount(ctx: any, amount: number) {
+async function handleAmount(ctx: MyContext, amount: number) {
   const method = ctx.session.method as Method | undefined;
-  if (!method) return ctx.reply("Please start again with /start");
+  if (!method) {
+    await ctx.reply("Please start again with /start");
+    return;
+  }
   const settings = await getSettings();
   const owners = await getOwnerAccounts();
 
@@ -96,22 +102,16 @@ async function handleAmount(ctx: any, amount: number) {
     const { owner } = match;
     const kb = new InlineKeyboard().text("✅ Mark Paid", "MARKPAID_OWNER");
     await ctx.reply(
-      `Pay **${amount} ${settings.CURRENCY}** via ${owner.method} to ${owner.handle}.
-
-${owner.instructions}`,
+      `Pay **${amount} ${settings.CURRENCY}** via ${owner.method} to ${owner.handle}.\n\n${owner.instructions}`,
       { parse_mode: "Markdown", reply_markup: kb }
     );
   } else {
-    // mark matched in sheet
     await markCashoutMatched(match.cashout.cashout_id, ctx.from!.id);
     const recv = match.cashout.receiver_handle || "<ask recipient for handle>";
     const kb = new InlineKeyboard().text("✅ Mark Paid", `MARKPAID_CASHOUT_${match.cashout.cashout_id}`);
     await ctx.reply(
-      `Matched to cash-out request **${match.cashout.cashout_id}**.
-` +
-      `Pay **${match.amount} ${settings.CURRENCY}** via ${match.cashout.method} to **${recv}**.
-
-` +
+      `Matched to cash-out request **${match.cashout.cashout_id}**.\n` +
+      `Pay **${match.amount} ${settings.CURRENCY}** via ${match.cashout.method} to **${recv}**.\n\n` +
       `After sending, tap 'Mark Paid'.`,
       { parse_mode: "Markdown", reply_markup: kb }
     );
@@ -122,13 +122,13 @@ ${owner.instructions}`,
   ctx.session.method = undefined;
 }
 
-// Minimal webhook server
+// ----- Webhook server -----
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.get("/", (_req, res) => res.send("OK"));
-app.use(`/${BOT_TOKEN}`, (await import("grammy/web")).webhookCallback(bot, "express"));
+app.use(`/${BOT_TOKEN}`, webhookCallback(bot, "express"));
 
 app.listen(PORT, async () => {
   console.log(`Server on :${PORT}`);
@@ -141,8 +141,8 @@ app.listen(PORT, async () => {
       console.error("Failed to set webhook", e);
     }
   } else {
-    // fallback to long polling for local dev
     await bot.start();
     console.log("Bot started with long polling");
   }
 });
+
