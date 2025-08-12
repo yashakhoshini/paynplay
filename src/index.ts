@@ -131,11 +131,11 @@ const app = express();
 app.get("/", (_, res) => res.send("OK"));
 
 if (BASE_URL) {
-  app.use(`/${BOT_TOKEN}`, webhookCallback(bot as any, "express"));
+  app.use(`/`, webhookCallback(bot as any, "express"));
   app.listen(PORT, async () => {
     console.log(`Server on :${PORT}`);
-    await bot.api.setWebhook(`${BASE_URL}/${BOT_TOKEN}`);
-    console.log(`Webhook set to ${BASE_URL}/${BOT_TOKEN}`);
+    await bot.api.setWebhook(`${BASE_URL}/`);
+    console.log(`Webhook set to ${BASE_URL}/`);
   });
 } else {
   app.listen(PORT, () => {
