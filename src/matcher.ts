@@ -1,24 +1,39 @@
-import type { MatchResult, OwnerAccount, CashoutRow, Method } from "./types.js";
-import { listPendingCashouts } from "./sheets.js";
+import { OwnerAccount, getOpenCashouts, markCashoutMatchedByRow } from './sheets.js';
+import { OWNER_FALLBACK_THRESHOLD } from './config.js';
 
-export async function findMatch(method: Method, amount: number, owners: OwnerAccount[], ownerThreshold: number): Promise<MatchResult> {
-  // business rule v1:
-  // - Only match when buy-in amount EXACTLY equals the top priority cashout amount (no split/overpay).
-  // - Priority: FAST first (oldest requested_at first), then NORMAL (oldest first).
-  const pending = await listPendingCashouts(method);
-  const sorted = pending.sort((a, b) => {
-    if (a.priority_type !== b.priority_type) return a.priority_type === "FAST" ? -1 : 1;
-    return (a.requested_at || "").localeCompare(b.requested_at || "");
-  });
-  const candidate = sorted.find(c => c.amount === amount);
+export type MatchResult =
+  | { type: 'OWNER'; owner: OwnerAccount; amount: number }
+  | { type: 'CASHOUT'; amount: number; rowIndex: number; method: string; receiver?: string };
 
-  if (!candidate) {
-    // fallback to owner if no exact match
-    const owner = owners.find(o => o.method === method);
-    if (!owner) throw new Error(`No owner account configured for ${method}`);
-    return { type: "OWNER", method, owner, amount };
+export async function findMatch(
+  method: string,
+  amount: number,
+  owners: OwnerAccount[],
+  ownerThreshold: number = OWNER_FALLBACK_THRESHOLD
+): Promise<MatchResult> {
+
+  // 1) Try to match an exact cash-out in the sheet (FAST first handled externally in future)
+  const cashouts = await getOpenCashouts();
+
+  // sort: for now, oldest first (by row order) — you can evolve this to use Timestamp if present
+  for (const co of cashouts) {
+    if (co.method === method && co.amount === amount) {
+      // mark matched
+      await markCashoutMatchedByRow(co.rowIndex, 'matched');
+      return { type: 'CASHOUT', amount, rowIndex: co.rowIndex, method, receiver: co.receiver_handle };
+    }
   }
 
-  // Ensure amount not less than requested (we only matched exact)
-  return { type: "CASHOUT", cashout: candidate, amount };
+  // 2) If amount is too large or no matches, route to owner
+  const owner = owners.find(o => o.method === method);
+  if (amount >= ownerThreshold || !owner) {
+    // fallback to any owner for that method (or first available)
+    const fallback = owner || owners[0];
+    if (fallback) return { type: 'OWNER', owner: fallback, amount };
+  }
+
+  // Default to owner if nothing else
+  if (owners.length) return { type: 'OWNER', owner: owners[0], amount };
+  // If truly no owner handle is present, we still return an OWNER type with dummy handle
+  return { type: 'OWNER', owner: { method, handle: '<ask owner for handle>', display_name: 'Owner', instructions: '' }, amount };
 }
