@@ -1,104 +1,283 @@
-import { google } from "googleapis";
-import { GOOGLE_CLIENT_EMAIL, GOOGLE_PRIVATE_KEY, SHEET_ID } from "./config.js";
-import type { Settings, OwnerAccount, CashoutRow, BuyinRow, Method } from "./types.js";
+import { google, sheets_v4 } from 'googleapis';
+import {
+  SHEET_ID,
+  DEFAULT_METHODS,
+  DEFAULT_CURRENCY,
+  DEFAULT_FAST_FEE,
+  OWNER_FALLBACK_THRESHOLD,
+  OWNER_TG_USERNAME,
+  ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE
+} from './config.js';
 
-const auth = new google.auth.JWT({
-  email: GOOGLE_CLIENT_EMAIL,
-  key: GOOGLE_PRIVATE_KEY,
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+type Sheets = sheets_v4.Sheets;
+
+const auth = new google.auth.GoogleAuth({
+  scopes: ['https://www.googleapis.com/auth/spreadsheets']
 });
 
-const sheets = google.sheets({ version: "v4", auth });
+async function client(): Promise<Sheets> {
+  const a = await auth.getClient();
+  return google.sheets({ version: 'v4', auth: a });
+}
 
-const A1 = {
-  Settings: "Settings!A1:B999",
-  OwnerAccounts: "OwnerAccounts!A1:D999",
-  Cashouts: "Cashouts!A1:M999",
-  Buyins: "Buyins!A1:I999",
+export type OwnerAccount = {
+  method: 'ZELLE' | 'VENMO' | 'CASHAPP' | string;
+  handle: string;
+  display_name: string;
+  instructions: string;
 };
 
+export type Settings = {
+  CLUB_NAME: string;
+  METHODS_ENABLED: string[];     // e.g. ['ZELLE','VENMO']
+  CURRENCY: string;              // e.g. 'USD'
+  FAST_FEE_PCT: number;          // e.g. 0.02
+  OWNER_FALLBACK_THRESHOLD: number;
+  OWNER_TG_USERNAME: string;
+};
+
+export type CashoutRow = {
+  rowIndex: number;            // 1-based in Google Sheets
+  username?: string;
+  method: string;
+  amount: number;
+  status?: string;
+  receiver_handle?: string;    // if present in sheet
+  notes?: string;
+};
+
+function normalizeHeader(s: string) {
+  return s.trim().toLowerCase();
+}
+
+function toNumber(amount: string | number): number {
+  if (typeof amount === 'number') return amount;
+  const cleaned = amount.replace(/[,$]/g, '').replace(/[^\d.\-]/g, '');
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeMethod(m: string): string {
+  const x = m.trim().toUpperCase();
+  if (x === 'ZELLE') return 'ZELLE';
+  if (x === 'VENMO') return 'VENMO';
+  if (x === 'CASHAPP' || x === 'CASH APP') return 'CASHAPP';
+  return x; // pass-through for custom methods (Bank Transfer, PayPal, etc.)
+}
+
+async function getFirstSheetMeta(svc: Sheets) {
+  const meta = await svc.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  const sheet = meta.data.sheets?.[0];
+  if (!sheet || !sheet.properties?.title) {
+    throw new Error('No sheets found in spreadsheet.');
+  }
+  return { title: sheet.properties.title, sheetId: sheet.properties.sheetId! };
+}
+
 export async function getSettings(): Promise<Settings> {
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: A1.Settings });
-  const rows = res.data.values || [];
-  const obj: Record<string, string> = {};
-  for (const [k, v] of rows.slice(1)) obj[k] = v;
-  const METHODS_ENABLED = (obj["METHODS_ENABLED"] || "").split(",").map(s => s.trim()).filter(Boolean) as Method[];
+  const svc = await client();
+
+  // Try read Settings!A1:B
+  try {
+    const res = await svc.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: 'Settings!A1:B999',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    const rows = res.data.values || [];
+    const headers = (rows[0] || []).map(String);
+    if (headers[0]?.toLowerCase() === 'key' && headers[1]?.toLowerCase() === 'value') {
+      const map = new Map<string, string>();
+      for (let i = 1; i < rows.length; i++) {
+        const [k, v] = rows[i] || [];
+        if (!k) continue;
+        map.set(String(k).trim().toUpperCase(), String(v ?? '').trim());
+      }
+      const methods = (map.get('METHODS_ENABLED') || DEFAULT_METHODS.join(','))
+        .split(',')
+        .map(s => s.trim().toUpperCase())
+        .filter(Boolean);
+
+      return {
+        CLUB_NAME: map.get('CLUB_NAME') || 'Club',
+        METHODS_ENABLED: methods,
+        CURRENCY: map.get('CURRENCY') || DEFAULT_CURRENCY,
+        FAST_FEE_PCT: Number(map.get('FAST_FEE_PCT') || DEFAULT_FAST_FEE),
+        OWNER_FALLBACK_THRESHOLD: Number(map.get('OWNER_FALLBACK_THRESHOLD') || OWNER_FALLBACK_THRESHOLD),
+        OWNER_TG_USERNAME: map.get('OWNER_TG_USERNAME') || OWNER_TG_USERNAME
+      };
+    }
+  } catch (_) {
+    // ignore (no Settings tab)
+  }
+
+  // Fallback: infer from first sheet headers and values
+  const { title } = await getFirstSheetMeta(svc);
+  const res = await svc.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `${title}!1:1`,
+    valueRenderOption: 'UNFORMATTED_VALUE'
+  });
+  const headers = (res.data.values?.[0] || []).map(String);
+  const hmap = new Map(headers.map((h, i) => [normalizeHeader(h), i]));
+
+  // Guess methods from Payment Method column
+  const pmIdx = hmap.get('payment method');
+  let methods = DEFAULT_METHODS;
+  if (pmIdx !== undefined) {
+    const res2 = await svc.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: `${title}!${2}:${200}`,
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    const vals = res2.data.values || [];
+    const uniq = new Set<string>();
+    for (const row of vals) {
+      const m = row[pmIdx];
+      if (m) uniq.add(normalizeMethod(String(m)));
+    }
+    if (uniq.size) methods = Array.from(uniq);
+  }
+
   return {
-    CLUB_NAME: obj["CLUB_NAME"] || "Club",
-    METHODS_ENABLED,
-    CURRENCY: obj["CURRENCY"] || "USD",
-    FAST_FEE_PCT: parseFloat(obj["FAST_FEE_PCT"] || "0"),
-    OWNER_FALLBACK_THRESHOLD: parseFloat(obj["OWNER_FALLBACK_THRESHOLD"] || "999999"),
-    OWNER_TG_USERNAME: obj["OWNER_TG_USERNAME"],
+    CLUB_NAME: 'Club',
+    METHODS_ENABLED: methods,
+    CURRENCY: DEFAULT_CURRENCY,
+    FAST_FEE_PCT: DEFAULT_FAST_FEE,
+    OWNER_FALLBACK_THRESHOLD,
+    OWNER_TG_USERNAME
   };
 }
 
 export async function getOwnerAccounts(): Promise<OwnerAccount[]> {
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: A1.OwnerAccounts });
-  const rows = res.data.values || [];
-  const headers = rows[0] || [];
-  const idx = (name: string) => headers.indexOf(name);
-  return rows.slice(1).filter(r => r.length).map(r => ({
-    method: r[idx("method")] as any,
-    handle: r[idx("handle")],
-    display_name: r[idx("display_name")],
-    instructions: r[idx("instructions")],
-  }));
+  const svc = await client();
+
+  // Try OwnerAccounts sheet if present
+  try {
+    const res = await svc.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: 'OwnerAccounts!A1:D999',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    const rows = res.data.values || [];
+    const headers = (rows[0] || []).map((h) => normalizeHeader(String(h)));
+    const idx = {
+      method: headers.indexOf('method'),
+      handle: headers.indexOf('handle'),
+      display_name: headers.indexOf('display_name'),
+      instructions: headers.indexOf('instructions')
+    };
+    if (idx.method !== -1 && idx.handle !== -1) {
+      const out: OwnerAccount[] = [];
+      for (let i = 1; i < rows.length; i++) {
+        const r = rows[i] || [];
+        const method = normalizeMethod(String(r[idx.method] ?? ''));
+        const handle = String(r[idx.handle] ?? '');
+        if (!method || !handle) continue;
+        out.push({
+          method,
+          handle,
+          display_name: String(r[idx.display_name] ?? 'Owner'),
+          instructions: String(r[idx.instructions] ?? '')
+        });
+      }
+      if (out.length) return out;
+    }
+  } catch (_) {
+    // ignore
+  }
+
+  // Fallback to env-provided handles
+  const out: OwnerAccount[] = [];
+  if (ZELLE_HANDLE)   out.push({ method: 'ZELLE',   handle: ZELLE_HANDLE,   display_name: 'Owner', instructions: '' });
+  if (VENMO_HANDLE)   out.push({ method: 'VENMO',   handle: VENMO_HANDLE,   display_name: 'Owner', instructions: '' });
+  if (CASHAPP_HANDLE) out.push({ method: 'CASHAPP', handle: CASHAPP_HANDLE, display_name: 'Owner', instructions: '' });
+  return out;
 }
 
-export async function appendBuyin(b: BuyinRow) {
-  const values = [[
-    b.buyin_id, b.tg_user_id, b.display_name, b.method, b.amount,
-    b.status, b.assigned_to, b.created_at, b.updated_at
-  ]];
-  await sheets.spreadsheets.values.append({
+// Read open cash-outs from ANY sheet layout (first sheet)
+export async function getOpenCashouts(): Promise<CashoutRow[]> {
+  const svc = await client();
+  const { title } = await getFirstSheetMeta(svc);
+  const res = await svc.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: "Buyins!A1",
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values }
+    range: `${title}!1:10000`,
+    valueRenderOption: 'UNFORMATTED_VALUE'
   });
+
+  const values = res.data.values || [];
+  const headers = (values[0] || []).map(String);
+  const hmap = new Map(headers.map((h, i) => [normalizeHeader(h), i]));
+
+  // Figure out key columns
+  const idx = {
+    transactionType: hmap.get('transaction type') ?? hmap.get('type') ?? hmap.get('txn type'),
+    amount: hmap.get('amount') ?? hmap.get('amt'),
+    paymentMethod: hmap.get('payment method') ?? hmap.get('method'),
+    status: hmap.get('status'),
+    username: hmap.get('username') ?? hmap.get('user') ?? hmap.get('name'),
+    receiver: hmap.get('receiver_handle') ?? hmap.get('receiver') ?? hmap.get('payee') ?? hmap.get('handle')
+  };
+
+  const out: CashoutRow[] = [];
+  for (let r = 1; r < values.length; r++) {
+    const row = values[r] || [];
+    const type = String(row[idx.transactionType ?? -1] ?? '').toLowerCase();
+    const status = String(row[idx.status ?? -1] ?? '').toLowerCase();
+
+    // treat as open cash-out if type includes 'cash' and 'out', and status is empty or 'pending'
+    const isCashout = /cash.?out/.test(type);
+    const isPending = !status || /pending|open|awaiting/i.test(status);
+    if (!isCashout || !isPending) continue;
+
+    const method = normalizeMethod(String(row[idx.paymentMethod ?? -1] ?? ''));
+    const amount = toNumber(String(row[idx.amount ?? -1] ?? '0'));
+    if (!method || !amount) continue;
+
+    out.push({
+      rowIndex: r + 1, // 1-based
+      username: String(row[idx.username ?? -1] ?? ''),
+      method,
+      amount,
+      status: status || 'pending',
+      receiver_handle: String(row[idx.receiver ?? -1] ?? '')
+    });
+  }
+  return out;
 }
 
-export async function listPendingCashouts(method: Method): Promise<CashoutRow[]> {
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: A1.Cashouts });
-  const rows = res.data.values || [];
-  const headers = rows[0] || [];
-  const idx = (name: string) => headers.indexOf(name);
-  const toRow = (r: string[]): CashoutRow => ({
-    cashout_id: r[idx("cashout_id")],
-    tg_user_id: r[idx("tg_user_id")],
-    display_name: r[idx("display_name")],
-    method: r[idx("method")] as any,
-    amount: parseFloat(r[idx("amount")]),
-    priority_type: (r[idx("priority_type")] as any) || "NORMAL",
-    status: (r[idx("status")] as any) || "PENDING",
-    requested_at: r[idx("requested_at")] || "",
-    matched_at: r[idx("matched_at")] || "",
-    payer_tg_user_id: r[idx("payer_tg_user_id")] || "",
-    payer_handle: r[idx("payer_handle")] || "",
-    receiver_handle: (idx("receiver_handle")>=0? r[idx("receiver_handle")] : "" ) || "",
-    notes: r[idx("notes")] || ""
-  });
-  return rows.slice(1)
-    .filter(r => r.length && r[idx("status")] === "PENDING" && r[idx("method")] === method)
-    .map(toRow);
-}
+export async function markCashoutMatchedByRow(rowIndex: number, newStatus = 'matched'): Promise<void> {
+  const svc = await client();
+  const { title } = await getFirstSheetMeta(svc);
 
-export async function markCashoutMatched(cashout_id: string, payer_tg_user_id: string | number) {
-  // naive implementation: read all, find row, update columns "status","matched_at","payer_tg_user_id"
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: A1.Cashouts });
-  const rows = res.data.values || [];
-  const headers = rows[0] || [];
-  const idx = (name: string) => headers.indexOf(name);
-  const i = rows.findIndex(r => r[idx("cashout_id")] === cashout_id);
-  if (i < 0) return;
-  rows[i][idx("status")] = "MATCHED";
-  rows[i][idx("matched_at")] = new Date().toISOString();
-  rows[i][idx("payer_tg_user_id")] = String(payer_tg_user_id);
-  await sheets.spreadsheets.values.update({
+  // Try to find a "Status" column; if not found, silently return.
+  const head = await svc.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `Cashouts!A${i+1}:M${i+1}`,
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values: [rows[i]] }
+    range: `${title}!1:1`,
+    valueRenderOption: 'UNFORMATTED_VALUE'
   });
+  const headers = (head.data.values?.[0] || []).map(String);
+  const hmap = new Map(headers.map((h, i) => [normalizeHeader(h), i]));
+  const statusIdx = hmap.get('status');
+  if (statusIdx === undefined) return;
+
+  const colLetter = (i: number) => {
+    // 0-based index to letters
+    let n = i + 1, s = '';
+    while (n) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
+    return s;
+  };
+  const statusCol = colLetter(statusIdx);
+
+  await svc.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: `${title}!${statusCol}${rowIndex}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [[newStatus]] }
+  });
+}
+
+// Back-compat shim for old code
+export async function markCashoutMatched(cashout_id: string, _payerId: number) {
+  // now we mark by row instead of id; no-op here (matcher will call markCashoutMatchedByRow)
 }
