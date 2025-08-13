@@ -54,23 +54,21 @@ bot.command("ping", async (ctx: MyContext) => ctx.reply("pong ✅"));
 
 // /help handler - provides guidance before /start
 bot.command("help", async (ctx: MyContext) => {
-  const helpText = `🎰 **Pay-n-Play Bot Help**
+  const helpText = `🎰 Pay-n-Play Bot Help
 
-**How to use this bot:**
+How to use this bot:
 
-1️⃣ **Start a buy-in:** Type /start to begin the payment process
-2️⃣ **Choose payment method:** Select from available options (Zelle, Venmo, etc.)
-3️⃣ **Enter amount:** Specify how much you want to buy in
-4️⃣ **Get payment instructions:** The bot will tell you who to pay and how
-5️⃣ **Send screenshot:** Post your payment proof in the group chat
-6️⃣ **Wait for confirmation:** A loader/owner will verify and mark it paid
+1️⃣ Start a buy-in: Type /start to begin the payment process
+2️⃣ Choose payment method: Select from available options (Zelle, Venmo, etc.)
+3️⃣ Enter amount: Specify how much you want to buy in
+4️⃣ Get payment instructions: The bot will tell you who to pay and how
+5️⃣ Send screenshot: Post your payment proof in the group chat
 
-**Commands:**
+Commands:
 • /start - Begin a new buy-in
 • /help - Show this help message
-• /ping - Check if bot is working
 
-**Need help?** Contact the group admins or loaders.`;
+Need help? Contact @Cardinal_J1 @Preshmiles @calmcrafter101`;
   
   await ctx.reply(helpText, { parse_mode: "Markdown" });
 });
