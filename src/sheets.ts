@@ -47,6 +47,8 @@ export type CashoutRow = {
   status?: string;
   receiver_handle?: string;    // if present in sheet
   notes?: string;
+  timestamp?: string;          // when the cashout was requested
+  priority?: string;           // priority type if present
 };
 
 function normalizeHeader(s: string): string {
@@ -249,7 +251,9 @@ export async function getOpenCashouts(): Promise<CashoutRow[]> {
         method: row.paymentMethod,
         amount: row.amount,
         status: row.status || 'pending',
-        receiver_handle: row.receiver || ''
+        receiver_handle: row.receiver || '',
+        timestamp: row.timestamp || '',
+        priority: row.priority || ''
       });
     }
   }

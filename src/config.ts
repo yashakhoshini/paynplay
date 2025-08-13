@@ -24,7 +24,7 @@ export const DEFAULT_METHODS = (process.env.METHODS_ENABLED_DEFAULT || 'ZELLE,VE
 
 export const DEFAULT_CURRENCY = process.env.CURRENCY_DEFAULT || 'USD';
 export const DEFAULT_FAST_FEE = Number(process.env.FAST_FEE_PCT_DEFAULT || '0.02');
-export const OWNER_FALLBACK_THRESHOLD = Number(process.env.OWNER_FALLBACK_THRESHOLD || '999999');
+export const OWNER_FALLBACK_THRESHOLD = Number(process.env.OWNER_FALLBACK_THRESHOLD || '100');
 
 // Google Service Account (required for Sheets access)
 export const GOOGLE_CLIENT_EMAIL = required('GOOGLE_CLIENT_EMAIL');
