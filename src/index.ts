@@ -221,7 +221,7 @@ bot.callbackQuery("BUYIN", async (ctx: MyContext) => {
     await ctx.editMessageText(MSG.selectMethod, { reply_markup: kb });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Buy-in callback failed:`, error);
-    await ctx.answerCallbackQuery("Sorry, something went wrong. Please try again.", { show_alert: true });
+    await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
   }
 });
 
@@ -246,7 +246,7 @@ bot.callbackQuery(/METHOD_(.+)/, async (ctx: MyContext) => {
     await ctx.editMessageText(MSG.enterAmount, { reply_markup: kb });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Method selection failed:`, error);
-    await ctx.answerCallbackQuery("Sorry, something went wrong. Please try again.", { show_alert: true });
+    await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
   }
 });
 
@@ -256,14 +256,14 @@ bot.callbackQuery(/AMT_(\d+)/, async (ctx: MyContext) => {
     const amount = parseInt(ctx.match?.[1] || "0", 10);
     const validation = validateAmount(amount);
     if (!validation.valid) {
-      await ctx.answerCallbackQuery(validation.error!, { show_alert: true });
+      await ctx.answerCallbackQuery({ text: validation.error!, show_alert: true });
       return;
     }
     ctx.session.amount = amount;
     await handleAmount(ctx);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Amount selection failed:`, error);
-    await ctx.answerCallbackQuery("Sorry, something went wrong. Please try again.", { show_alert: true });
+    await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
   }
 });
 
@@ -273,7 +273,7 @@ bot.callbackQuery("AMT_CUSTOM", async (ctx: MyContext) => {
     await ctx.editMessageText(`Please enter the amount ($${MIN_BUYIN_AMOUNT}-$${MAX_BUYIN_AMOUNT}):`);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Custom amount prompt failed:`, error);
-    await ctx.answerCallbackQuery("Sorry, something went wrong. Please try again.", { show_alert: true });
+    await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
   }
 });
 
@@ -283,7 +283,7 @@ bot.callbackQuery("WITHDRAW", async (ctx: MyContext) => {
     await startWithdrawFlow(ctx);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Withdraw button failed:`, error);
-    await ctx.answerCallbackQuery("Sorry, something went wrong. Please try again.", { show_alert: true });
+    await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
   }
 });
 
