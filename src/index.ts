@@ -172,7 +172,22 @@ bot.command("withdraw", async (ctx: MyContext) => {
 // /start handler
 bot.command("start", async (ctx: MyContext) => {
   try {
-    const settings = await getSettings();
+    let settings;
+    try {
+      settings = await getSettings();
+    } catch (error) {
+      console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Google Sheets not configured, using defaults`);
+      // Use default settings when Google Sheets is not configured
+      settings = {
+        CLUB_NAME: 'Club',
+        METHODS_ENABLED: ['ZELLE', 'VENMO', 'CASHAPP', 'PAYPAL'],
+        CURRENCY: 'USD',
+        FAST_FEE_PCT: 0.02,
+        OWNER_FALLBACK_THRESHOLD: 100,
+        OWNER_TG_USERNAME: ''
+      };
+    }
+    
     const kb = new InlineKeyboard()
       .text("💸 Buy-In", "BUYIN")
       .row()
@@ -189,8 +204,25 @@ bot.command("start", async (ctx: MyContext) => {
 // Buy-in start
 bot.callbackQuery("BUYIN", async (ctx: MyContext) => {
   try {
-    const settings = await getSettings();
-    const owners = await getOwnerAccounts();
+    let settings;
+    let owners = [];
+    
+    try {
+      settings = await getSettings();
+      owners = await getOwnerAccounts();
+    } catch (error) {
+      console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Google Sheets not configured, using defaults`);
+      // Use default settings when Google Sheets is not configured
+      settings = {
+        CLUB_NAME: 'Club',
+        METHODS_ENABLED: ['ZELLE', 'VENMO', 'CASHAPP', 'PAYPAL'],
+        CURRENCY: 'USD',
+        FAST_FEE_PCT: 0.02,
+        OWNER_FALLBACK_THRESHOLD: 100,
+        OWNER_TG_USERNAME: ''
+      };
+      owners = [];
+    }
     
     // Get available methods from both pending withdrawals and owner accounts
     const availableMethods = new Set<string>();
