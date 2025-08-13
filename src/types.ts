@@ -59,6 +59,16 @@ export interface MatchResultCashout {
 
 export type MatchResult = MatchResultOwnerFallback | MatchResultCashout;
 
+// Enhanced match result with row information for new workflow
+export interface EnhancedMatchResult {
+  type: 'CASHOUT' | 'OWNER';
+  amount: number;
+  method: string;
+  rowIndex?: number; // For CASHOUT matches
+  receiver?: string; // For CASHOUT matches
+  owner?: OwnerAccount; // For OWNER matches
+}
+
 // New types for group workflow
 export interface Transaction {
   buyinId: string;
@@ -67,7 +77,7 @@ export interface Transaction {
   playerFirstName?: string;
   method: Method;
   amount: number;
-  match: MatchResult;
+  match: EnhancedMatchResult;
   timestamp: number;
   groupMessageId?: number;
   groupChatId?: number;

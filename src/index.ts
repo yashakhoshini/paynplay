@@ -250,6 +250,7 @@ bot.callbackQuery(/^MARKPAID:(.+?):(\d+)$/, async (ctx: MyContext) => {
 bot.on("my_chat_member", async (ctx: MyContext) => {
   if (!("my_chat_member" in ctx.update)) return;
   const upd = ctx.update.my_chat_member;
+  if (!upd) return; // Type guard for strict TS
   const chatId = upd.chat.id;
   try {
     const welcomeText = `🎰 **Pay-n-Play Bot is now active!**

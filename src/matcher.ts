@@ -1,16 +1,6 @@
 import { getOpenCashouts, markCashoutMatchedByRow } from './sheets.js';
 import { OWNER_FALLBACK_THRESHOLD } from './config.js';
-import { MatchResult, OwnerAccount, Method } from './types.js';
-
-// Enhanced match result with row information
-export interface EnhancedMatchResult {
-  type: 'CASHOUT' | 'OWNER';
-  amount: number;
-  method: string;
-  rowIndex?: number; // For CASHOUT matches
-  receiver?: string; // For CASHOUT matches
-  owner?: OwnerAccount; // For OWNER matches
-}
+import { MatchResult, OwnerAccount, Method, EnhancedMatchResult } from './types.js';
 
 export async function findMatch(
   method: string,
