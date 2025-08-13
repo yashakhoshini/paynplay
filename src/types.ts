@@ -93,3 +93,25 @@ export interface UserRole {
 export interface GroupSession {
   firstTimeUsers: Set<number>; // user IDs who have been greeted
 }
+
+// Withdrawal types
+export interface WithdrawalSession {
+  step?: "WITHDRAW_METHOD" | "WITHDRAW_AMOUNT" | "WITHDRAW_TAG";
+  method?: string;
+  amount?: number;
+  tag?: string;
+  requestTimestampISO?: string;
+}
+
+export interface WithdrawalRequest {
+  requestId: string;
+  userId: number;
+  username: string;
+  amountUSD: number;
+  method: string;
+  tag: string;
+  requestTimestampISO: string;
+  approvedByUserId?: number;
+  approvedAtISO?: string;
+  status?: string;
+}

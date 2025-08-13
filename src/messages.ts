@@ -15,8 +15,7 @@ export const MSG = {
     `Player: ${player}\n` +
     `Amount: *${amt} ${cur}*\n` +
     `Method: ${method}\n` +
-    `Pay to: *${recv}*\n\n` +
-    `Loaders/Owners: review the screenshot reply thread, then confirm.`,
+    `Pay to: *${recv}*`,
   notAuthorized: "You're not authorized to confirm payments.",
   paidConfirmed: (verifier: string, iso: string) => `✅ Paid confirmed by ${verifier} at ${iso}`,
   
@@ -57,5 +56,31 @@ export const MSG = {
   
   viewSheet: '🗒 View Sheet',
   adminPinRequest: 'Admin can pin this message for visibility.',
-  screenshotHint: 'Reply to this transaction card with the screenshot proof.'
+  screenshotHint: 'Reply to this transaction card with the screenshot proof.',
+  
+  // Withdrawal messages
+  withdrawWelcome: "Choose your withdrawal method:",
+  withdrawAmountPrompt: "Now send your amount (numbers only, e.g., 125):",
+  withdrawTagPrompt: "Now send your payment tag (e.g., @venmohandle or 555-123-4567):",
+  withdrawSummary: (method: string, amount: number, tag: string) =>
+    `Review your withdrawal:\n` +
+    `• Method: ${method}\n` +
+    `• Amount: $${amount.toFixed(2)}\n` +
+    `• Tag: ${tag}\n\n` +
+    `Tap "Submit Withdrawal" to send this to loaders.`,
+  withdrawSubmitted: "Submitted to loaders. You'll be queued after approval.",
+  withdrawCard: (requestId: string, username: string, userId: number, method: string, amount: number, tag: string, timestamp: string) =>
+    `🧾 *Withdrawal Request*\n` +
+    `ID: ${requestId}\n` +
+    `User: ${username} (id ${userId})\n` +
+    `Method: ${method}\n` +
+    `Amount: $${amount.toFixed(2)}\n` +
+    `Tag: ${tag}\n` +
+    `Requested at: ${timestamp}\n\n` +
+    `Tap *Confirm Withdrawal* to queue it.`,
+  withdrawConfirmed: (requestId: string, clickerId: number) => 
+    `✅ Withdrawal ${requestId} confirmed by ${clickerId}. Queued by wait time.`,
+  notAuthorizedWithdraw: "Not authorized to confirm withdrawals.",
+  withdrawNotFound: "Request not found or already processed.",
+  withdrawConfirmSuccess: "Withdrawal confirmed and queued."
 };
