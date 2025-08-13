@@ -299,7 +299,7 @@ bot.callbackQuery(/WITHDRAW_METHOD_(.+)/, async (ctx: MyContext) => {
     await ctx.editMessageText(MSG.withdrawAmountPrompt);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Withdraw method selection failed:`, error);
-    await ctx.answerCallbackQuery("Sorry, something went wrong. Please try again.", { show_alert: true });
+    await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
   }
 });
 
@@ -309,7 +309,7 @@ bot.callbackQuery("WITHDRAW_SUBMIT", async (ctx: MyContext) => {
     await handleWithdrawSubmit(ctx);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Withdraw submit failed:`, error);
-    await ctx.answerCallbackQuery("Sorry, something went wrong. Please try again.", { show_alert: true });
+    await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
   }
 });
 
@@ -319,7 +319,7 @@ bot.callbackQuery(/WITHDRAW_CONFIRM_(.+)/, async (ctx: MyContext) => {
     await handleWithdrawConfirm(ctx);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Withdraw confirm failed:`, error);
-    await ctx.answerCallbackQuery("Sorry, something went wrong. Please try again.", { show_alert: true });
+    await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
   }
 });
 
@@ -492,7 +492,7 @@ bot.callbackQuery(/^MARKPAID:(.+?):(\d+)$/, async (ctx: MyContext) => {
     await ctx.answerCallbackQuery({ text: "Marked as paid ✅" });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Mark paid failed:`, error);
-    await ctx.answerCallbackQuery("Sorry, something went wrong. Please try again.", { show_alert: true });
+    await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
   }
 });
 
@@ -617,7 +617,7 @@ async function handleWithdrawSubmit(ctx: MyContext) {
     
     const { method, amount, tag, requestTimestampISO } = ctx.session;
     if (!method || !amount || !tag || !requestTimestampISO) {
-      await ctx.answerCallbackQuery("Missing withdrawal information. Please start over with /withdraw", { show_alert: true });
+      await ctx.answerCallbackQuery({ text: "Missing withdrawal information. Please start over with /withdraw", show_alert: true });
       return;
     }
     
@@ -671,7 +671,7 @@ async function handleWithdrawSubmit(ctx: MyContext) {
       
     } catch (error) {
       console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error creating withdrawal request:`, error);
-      await ctx.answerCallbackQuery("Error creating withdrawal request. Please try again.", { show_alert: true });
+      await ctx.answerCallbackQuery({ text: "Error creating withdrawal request. Please try again.", show_alert: true });
     }
     
     ctx.session = {}; // Reset session
@@ -688,7 +688,7 @@ async function handleWithdrawConfirm(ctx: MyContext) {
     
     // Check if user is authorized
     if (!isAuthorized(fromId)) {
-      await ctx.answerCallbackQuery(MSG.notAuthorizedWithdraw, { show_alert: true });
+      await ctx.answerCallbackQuery({ text: MSG.notAuthorizedWithdraw, show_alert: true });
       return;
     }
     
@@ -699,7 +699,7 @@ async function handleWithdrawConfirm(ctx: MyContext) {
       // Get pending withdrawal
       const pending = await getPendingWithdrawal(requestId);
       if (!pending) {
-        await ctx.answerCallbackQuery(MSG.withdrawNotFound, { show_alert: true });
+        await ctx.answerCallbackQuery({ text: MSG.withdrawNotFound, show_alert: true });
         return;
       }
       
@@ -722,7 +722,7 @@ async function handleWithdrawConfirm(ctx: MyContext) {
       
     } catch (error) {
       console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error confirming withdrawal:`, error);
-      await ctx.answerCallbackQuery("Error confirming withdrawal. Please try again.", { show_alert: true });
+      await ctx.answerCallbackQuery({ text: "Error confirming withdrawal. Please try again.", show_alert: true });
     }
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Handle withdraw confirm failed:`, error);
