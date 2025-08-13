@@ -60,7 +60,7 @@ async function retryApiCall<T>(
 }
 
 // Only create auth if credentials are provided
-let auth: google.auth.GoogleAuth | null = null;
+let auth: any = null;
 
 if (GOOGLE_CLIENT_EMAIL && GOOGLE_PRIVATE_KEY) {
   auth = new google.auth.GoogleAuth({

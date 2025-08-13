@@ -205,7 +205,7 @@ bot.command("start", async (ctx: MyContext) => {
 bot.callbackQuery("BUYIN", async (ctx: MyContext) => {
   try {
     let settings;
-    let owners = [];
+    let owners: any[] = [];
     
     try {
       settings = await getSettings();
