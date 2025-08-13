@@ -52,6 +52,29 @@ bot.use(session({ initial }));
 // /ping for quick health check
 bot.command("ping", async (ctx: MyContext) => ctx.reply("pong ✅"));
 
+// /help handler - provides guidance before /start
+bot.command("help", async (ctx: MyContext) => {
+  const helpText = `🎰 **Pay-n-Play Bot Help**
+
+**How to use this bot:**
+
+1️⃣ **Start a buy-in:** Type /start to begin the payment process
+2️⃣ **Choose payment method:** Select from available options (Zelle, Venmo, etc.)
+3️⃣ **Enter amount:** Specify how much you want to buy in
+4️⃣ **Get payment instructions:** The bot will tell you who to pay and how
+5️⃣ **Send screenshot:** Post your payment proof in the group chat
+6️⃣ **Wait for confirmation:** A loader/owner will verify and mark it paid
+
+**Commands:**
+• /start - Begin a new buy-in
+• /help - Show this help message
+• /ping - Check if bot is working
+
+**Need help?** Contact the group admins or loaders.`;
+  
+  await ctx.reply(helpText, { parse_mode: "Markdown" });
+});
+
 // /start handler
 bot.command("start", async (ctx: MyContext) => {
   const settings = await getSettings();
@@ -229,12 +252,32 @@ bot.on("my_chat_member", async (ctx: MyContext) => {
   const upd = ctx.update.my_chat_member;
   const chatId = upd.chat.id;
   try {
-    await ctx.api.sendMessage(
-      chatId,
-      `👋 I'm active here.\nPlayers: DM @${process.env.BOT_USERNAME || "this_bot"} or type /start.\nLoaders/Owners: review screenshots and tap Mark Paid on transaction cards.`
-    );
-    // Pin if admin:
-    // const m = await ctx.api.sendMessage(chatId, "..."); await ctx.api.pinChatMessage(chatId, m.message_id).catch(() => {});
+    const welcomeText = `🎰 **Pay-n-Play Bot is now active!**
+
+**For Players:**
+• Type /start to begin a buy-in
+• Type /help for instructions
+• Or DM @${process.env.BOT_USERNAME || "this_bot"} directly
+
+**For Loaders/Owners:**
+• Review payment screenshots in reply threads
+• Click "✅ Mark Paid" on transaction cards to confirm payments
+
+**How it works:**
+1. Player types /start and follows the prompts
+2. Bot posts transaction card to this group
+3. Player replies with payment screenshot
+4. Loader/Owner clicks Mark Paid to confirm
+
+**Need help?** Type /help for detailed instructions.`;
+    
+    // Send and try to pin the welcome message
+    try {
+      const message = await ctx.api.sendMessage(chatId, welcomeText, { parse_mode: "Markdown" });
+      await ctx.api.pinChatMessage(chatId, message.message_id);
+    } catch (error) {
+      console.log('Could not pin message (bot may not be admin):', error);
+    }
   } catch (e) {
     console.error("my_chat_member welcome failed:", e);
   }
@@ -260,6 +303,28 @@ if (PRIVACY_HINTS_ENABLED) {
     }
   });
 }
+
+// Default message handler for guidance
+bot.on('message', async (ctx: MyContext) => {
+  // Only respond to text messages in private chats that aren't commands
+  if (ctx.chat?.type !== 'private' || !ctx.message?.text || ctx.message.text.startsWith('/')) {
+    return;
+  }
+  
+  // If user sends a regular message without using /start, guide them
+  if (!ctx.session.step) {
+    const guidanceText = `👋 Hi! I'm the Pay-n-Play Bot.
+
+To start a buy-in, please use one of these commands:
+
+• /start - Begin the payment process
+• /help - See detailed instructions
+
+I can't process regular messages - please use the commands above!`;
+    
+    await ctx.reply(guidanceText);
+  }
+});
 
 const app = express();
 app.use(express.json());
