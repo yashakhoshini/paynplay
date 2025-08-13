@@ -70,7 +70,7 @@ Commands:
 
 Need help? Contact @Cardinal_J1 @Preshmiles @calmcrafter101`;
   
-  await ctx.reply(helpText, { parse_mode: "Markdown" });
+  await ctx.reply(helpText);
 });
 
 // /start handler
