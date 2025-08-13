@@ -837,6 +837,17 @@ app.use(express.json());
 app.get("/", (_req, res) => res.send("OK"));
 
 if (BASE_URL) {
+  // Add debug logging for webhook requests
+  app.use(`/${BOT_TOKEN}`, (req, res, next) => {
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Webhook request received:`, {
+      method: req.method,
+      url: req.url,
+      body: req.body,
+      headers: req.headers
+    });
+    next();
+  });
+  
   app.use(`/${BOT_TOKEN}`, webhookCallback(bot, "express"));
   app.listen(PORT, async () => {
     const base = BASE_URL.replace(/\/+$/, "");
