@@ -848,12 +848,26 @@ if (BASE_URL) {
     next();
   });
   
-  app.use(`/${BOT_TOKEN}`, webhookCallback(bot, "express"));
+  // Add error handling to webhook callback
+  const webhookHandler = webhookCallback(bot, "express");
+  app.use(`/${BOT_TOKEN}`, async (req, res, next) => {
+    try {
+      await webhookHandler(req, res, next);
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Webhook callback error:`, error);
+      res.status(500).send('Webhook error');
+    }
+  });
+  
   app.listen(PORT, async () => {
-    const base = BASE_URL.replace(/\/+$/, "");
-    const url = `${base}/${BOT_TOKEN}`;
-    await bot.api.setWebhook(url);
-    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Webhook set to ${url}`);
+    try {
+      const base = BASE_URL.replace(/\/+$/, "");
+      const url = `${base}/${BOT_TOKEN}`;
+      await bot.api.setWebhook(url);
+      console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Webhook set to ${url}`);
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to set webhook:`, error);
+    }
   });
 } else {
   app.listen(PORT, () => {
