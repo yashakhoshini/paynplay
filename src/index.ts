@@ -145,12 +145,13 @@ bot.catch((err) => {
 });
 
 // Debug logging for all updates
-bot.on('message', (ctx) => {
+bot.on('message', async (ctx: MyContext, next: () => Promise<void>) => {
   console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Received message:`, {
-    from: ctx.from?.id,
-    text: ctx.message?.text,
-    chatType: ctx.chat?.type
+    from: (ctx as any).from?.id,
+    text: (ctx as any).message?.text,
+    chatType: (ctx as any).chat?.type
   });
+  await next(); // Let commands and other handlers run
 });
 
 // /ping for quick health check
@@ -647,15 +648,15 @@ bot.on("my_chat_member", async (ctx: MyContext) => {
 
 // First-time user reminder (if privacy hints enabled)
 if (PRIVACY_HINTS_ENABLED) {
-  bot.on('message', async (ctx) => {
+  bot.on('message', async (ctx: MyContext, next: () => Promise<void>) => {
     try {
-      if (!ctx.from || !ctx.chat || ctx.chat.type === 'private') return;
+      if (!(ctx as any).from || !(ctx as any).chat || (ctx as any).chat.type === 'private') return;
       
-      const groupSession = getGroupSession(ctx.chat.id);
+      const groupSession = getGroupSession((ctx as any).chat.id);
       
       // Check if this is a first-time user in this group
-      if (!groupSession.firstTimeUsers.has(ctx.from.id)) {
-        groupSession.firstTimeUsers.add(ctx.from.id);
+      if (!groupSession.firstTimeUsers.has((ctx as any).from.id)) {
+        groupSession.firstTimeUsers.add((ctx as any).from.id);
         
         // Send gentle reminder
         try {
@@ -667,6 +668,7 @@ if (PRIVACY_HINTS_ENABLED) {
     } catch (error) {
       console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] First-time user handling failed:`, error);
     }
+    await next(); // Important: let other handlers run
   });
 }
 
