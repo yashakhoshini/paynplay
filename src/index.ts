@@ -874,7 +874,10 @@ app.get("/health", (_req, res) => {
   });
 });
 
-if (BASE_URL) {
+// Check if we're in development mode (local testing)
+const isDevelopment = process.env.NODE_ENV === 'development' || !BASE_URL;
+
+if (BASE_URL && !isDevelopment) {
   console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Starting bot with webhook mode`);
   console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] BASE_URL: ${BASE_URL}`);
   console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] BOT_TOKEN: ${BOT_TOKEN ? "SET" : "MISSING"}`);
@@ -911,9 +914,25 @@ if (BASE_URL) {
     }
   });
 } else {
-  console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Starting bot with long polling mode`);
+  console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Starting bot with long polling mode (development/local)`);
+  
+  // Delete any existing webhook first
+  try {
+    await bot.api.deleteWebhook({ dropPendingUpdates: true });
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Deleted existing webhook`);
+  } catch (error) {
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] No webhook to delete or error:`, error.message);
+  }
+  
   app.listen(PORT, () => {
     console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Server on :${PORT} (long polling)`);
   });
-  bot.start();
+  
+  // Start the bot with polling
+  bot.start({
+    dropPendingUpdates: true,
+    onStart: () => {
+      console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] ✅ Bot started successfully with polling`);
+    }
+  });
 }
