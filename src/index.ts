@@ -135,7 +135,10 @@ bot.on('message', (ctx) => {
 // /ping for quick health check
 bot.command("ping", async (ctx: MyContext) => {
   try {
+    const userId = (ctx as any).from?.id || 'unknown';
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Ping command received from user ${userId}`);
     await ctx.reply("pong ✅");
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Ping response sent successfully`);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Ping failed:`, error);
   }
@@ -181,6 +184,9 @@ bot.command("withdraw", async (ctx: MyContext) => {
 // /start handler
 bot.command("start", async (ctx: MyContext) => {
   try {
+    const userId = (ctx as any).from?.id || 'unknown';
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Start command received from user ${userId}`);
+    
     let settings;
     try {
       settings = await getSettings();
@@ -836,7 +842,22 @@ const app = express();
 app.use(express.json());
 app.get("/", (_req, res) => res.send("OK"));
 
+// Add health check endpoint
+app.get("/health", (_req, res) => {
+  res.json({ 
+    status: "OK", 
+    timestamp: new Date().toISOString(),
+    client: CLIENT_NAME,
+    botToken: BOT_TOKEN ? "SET" : "MISSING",
+    baseUrl: BASE_URL || "NOT_SET"
+  });
+});
+
 if (BASE_URL) {
+  console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Starting bot with webhook mode`);
+  console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] BASE_URL: ${BASE_URL}`);
+  console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] BOT_TOKEN: ${BOT_TOKEN ? "SET" : "MISSING"}`);
+  
   // Add debug logging for webhook requests
   app.use(`/${BOT_TOKEN}`, (req, res, next) => {
     console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Webhook request received:`, {
@@ -850,26 +871,26 @@ if (BASE_URL) {
   
   // Add error handling to webhook callback
   const webhookHandler = webhookCallback(bot, "express");
-  app.use(`/${BOT_TOKEN}`, async (req, res, next) => {
-    try {
-      await webhookHandler(req, res, next);
-    } catch (error) {
-      console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Webhook callback error:`, error);
-      res.status(500).send('Webhook error');
-    }
-  });
+  app.use(`/${BOT_TOKEN}`, webhookHandler);
   
   app.listen(PORT, async () => {
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Server started on port ${PORT}`);
     try {
       const base = BASE_URL.replace(/\/+$/, "");
       const url = `${base}/${BOT_TOKEN}`;
+      console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Setting webhook to: ${url}`);
       await bot.api.setWebhook(url);
-      console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Webhook set to ${url}`);
+      console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Webhook set successfully`);
+      
+      // Verify webhook was set
+      const webhookInfo = await bot.api.getWebhookInfo();
+      console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Webhook info:`, webhookInfo);
     } catch (error) {
       console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to set webhook:`, error);
     }
   });
 } else {
+  console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Starting bot with long polling mode`);
   app.listen(PORT, () => {
     console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Server on :${PORT} (long polling)`);
   });
