@@ -14,7 +14,6 @@ import { getSettings, getOwnerAccounts, markBuyinPaid } from "./sheets.js";
 import { findMatch } from "./matcher.js";
 import { isPrivileged } from "./roles.js";
 import { Transaction, GroupSession } from "./types.js";
-import type { ChatMemberUpdatedContext } from "grammy";
 
 type SessionData = {
   step?: "METHOD" | "AMOUNT";
@@ -264,7 +263,7 @@ bot.callbackQuery(/^MARKPAID:(.+)$/, async (ctx: MyContext) => {
 });
 
 // Group welcome message when bot is added
-bot.on('my_chat_member', async (ctx: ChatMemberUpdatedContext) => {
+bot.on('my_chat_member', async (ctx: MyContext) => {
   const upd = ctx.update.my_chat_member;
   if (!upd) return; // type guard for strict TS
 
