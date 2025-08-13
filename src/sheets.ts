@@ -6,7 +6,7 @@ import {
   DEFAULT_FAST_FEE,
   OWNER_FALLBACK_THRESHOLD,
   OWNER_TG_USERNAME,
-  ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE,
+  ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE,
   GOOGLE_CLIENT_EMAIL,
   GOOGLE_PRIVATE_KEY
 } from './config.js';
@@ -65,9 +65,10 @@ function normalizeMethod(m: string): string {
   if (x === 'ZELLE') return 'ZELLE';
   if (x === 'VENMO') return 'VENMO';
   if (x === 'CASHAPP' || x === 'CASH APP') return 'CASHAPP';
+  if (x === 'PAYPAL') return 'PAYPAL';
   if (x === 'CASH') return ''; // Exclude CASH method
   if (x === 'BANK TRANSFER' || x === 'BANKTRANSFER') return ''; // Exclude Bank Transfer method
-  return x; // pass-through for other custom methods (PayPal, etc.)
+  return x; // pass-through for other custom methods
 }
 
 async function getFirstSheetMeta(svc: Sheets) {
@@ -198,6 +199,7 @@ export async function getOwnerAccounts(): Promise<OwnerAccount[]> {
   if (ZELLE_HANDLE)   out.push({ method: 'ZELLE',   handle: ZELLE_HANDLE,   display_name: 'Owner', instructions: '' });
   if (VENMO_HANDLE)   out.push({ method: 'VENMO',   handle: VENMO_HANDLE,   display_name: 'Owner', instructions: '' });
   if (CASHAPP_HANDLE) out.push({ method: 'CASHAPP', handle: CASHAPP_HANDLE, display_name: 'Owner', instructions: '' });
+  if (PAYPAL_HANDLE)  out.push({ method: 'PAYPAL',  handle: PAYPAL_HANDLE,  display_name: 'Owner', instructions: '' });
   return out;
 }
 

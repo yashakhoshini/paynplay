@@ -16,7 +16,7 @@ export const PORT      = Number(process.env.PORT || 8080);
 
 // Client-proof defaults (optional)
 export const OWNER_TG_USERNAME = process.env.OWNER_TG_USERNAME || ''; // e.g. yashakhoshini
-export const DEFAULT_METHODS = (process.env.METHODS_ENABLED_DEFAULT || 'ZELLE,VENMO')
+export const DEFAULT_METHODS = (process.env.METHODS_ENABLED_DEFAULT || 'ZELLE,VENMO,CASHAPP,PAYPAL')
   .split(',')
   .map(s => s.trim().toUpperCase())
   .filter(Boolean)
@@ -34,6 +34,7 @@ export const GOOGLE_PRIVATE_KEY = required('GOOGLE_PRIVATE_KEY').replace(/\\n/g,
 export const ZELLE_HANDLE   = process.env.ZELLE_HANDLE   || '';
 export const VENMO_HANDLE   = process.env.VENMO_HANDLE   || '';
 export const CASHAPP_HANDLE = process.env.CASHAPP_HANDLE || '';
+export const PAYPAL_HANDLE  = process.env.PAYPAL_HANDLE  || '';
 
 // New environment variables for group workflow
 export const LOADER_GROUP_ID = process.env.LOADER_GROUP_ID || '';

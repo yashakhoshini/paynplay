@@ -9,7 +9,7 @@ GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYour private key here with \n e
 # Optional Environment Variables (with defaults)
 BASE_URL=https://your-app.up.railway.app
 PORT=8080
-METHODS_ENABLED_DEFAULT=ZELLE,VENMO
+METHODS_ENABLED_DEFAULT=ZELLE,VENMO,CASHAPP,PAYPAL
 CURRENCY_DEFAULT=USD
 FAST_FEE_PCT_DEFAULT=0.02
 OWNER_FALLBACK_THRESHOLD=999999
@@ -19,6 +19,7 @@ OWNER_TG_USERNAME=your_telegram_username
 ZELLE_HANDLE=your@email.com
 VENMO_HANDLE=@your_venmo_handle
 CASHAPP_HANDLE=$your_cashapp_handle
+PAYPAL_HANDLE=your@paypal_email.com
 
 # Group workflow settings
 LOADER_GROUP_ID=-1001234567890

@@ -305,6 +305,7 @@ export function normalizeMethod(method: string): string {
   if (normalized === 'ZELLE') return 'ZELLE';
   if (normalized === 'VENMO') return 'VENMO';
   if (normalized === 'CASHAPP' || normalized === 'CASH APP') return 'CASHAPP';
+  if (normalized === 'PAYPAL') return 'PAYPAL';
   if (normalized === 'CASH') return ''; // Exclude CASH method
   if (normalized === 'BANK TRANSFER' || normalized === 'BANKTRANSFER') return ''; // Exclude Bank Transfer method
   return normalized; // pass-through for other custom methods
