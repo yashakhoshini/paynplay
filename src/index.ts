@@ -43,6 +43,89 @@ function initial(): SessionData {
 const activeTransactions = new Map<string, Transaction>();
 const groupSessions = new Map<number, GroupSession>();
 
+// Cache for Google Sheets data to improve performance
+interface CachedData {
+  settings: any;
+  owners: any[];
+  lastUpdated: number;
+}
+
+const sheetsCache: CachedData = {
+  settings: null,
+  owners: [],
+  lastUpdated: 0
+};
+
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache TTL
+
+// Get cached settings or fetch from sheets
+async function getCachedSettings() {
+  const startTime = Date.now();
+  const now = Date.now();
+  
+  if (sheetsCache.settings && (now - sheetsCache.lastUpdated) < CACHE_TTL) {
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Settings served from cache (${Date.now() - startTime}ms)`);
+    return sheetsCache.settings;
+  }
+  
+  try {
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Fetching settings from Google Sheets...`);
+    const settings = await getSettings();
+    sheetsCache.settings = settings;
+    sheetsCache.lastUpdated = now;
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Settings fetched from sheets (${Date.now() - startTime}ms)`);
+    return settings;
+  } catch (error) {
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Google Sheets not configured, using defaults`);
+    // Use default settings when Google Sheets is not configured
+    const defaultSettings = {
+      CLUB_NAME: 'Club',
+      METHODS_ENABLED: ['ZELLE', 'VENMO', 'CASHAPP', 'PAYPAL'],
+      CURRENCY: 'USD',
+      FAST_FEE_PCT: 0.02,
+      OWNER_FALLBACK_THRESHOLD: 100,
+      OWNER_TG_USERNAME: ''
+    };
+    sheetsCache.settings = defaultSettings;
+    sheetsCache.lastUpdated = now;
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Settings served from defaults (${Date.now() - startTime}ms)`);
+    return defaultSettings;
+  }
+}
+
+// Get cached owner accounts or fetch from sheets
+async function getCachedOwnerAccounts() {
+  const startTime = Date.now();
+  const now = Date.now();
+  
+  if (sheetsCache.owners.length > 0 && (now - sheetsCache.lastUpdated) < CACHE_TTL) {
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Owner accounts served from cache (${Date.now() - startTime}ms)`);
+    return sheetsCache.owners;
+  }
+  
+  try {
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Fetching owner accounts from Google Sheets...`);
+    const owners = await getOwnerAccounts();
+    sheetsCache.owners = owners;
+    sheetsCache.lastUpdated = now;
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Owner accounts fetched from sheets (${Date.now() - startTime}ms)`);
+    return owners;
+  } catch (error) {
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Google Sheets not configured, using empty owners`);
+    sheetsCache.owners = [];
+    sheetsCache.lastUpdated = now;
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Owner accounts served from defaults (${Date.now() - startTime}ms)`);
+    return [];
+  }
+}
+
+// Invalidate cache when data changes
+function invalidateCache() {
+  sheetsCache.settings = null;
+  sheetsCache.owners = [];
+  sheetsCache.lastUpdated = 0;
+}
+
 // Session cleanup timer
 setInterval(() => {
   const now = Date.now();
@@ -64,6 +147,18 @@ setInterval(() => {
   
   console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Session cleanup completed. Active transactions: ${activeTransactions.size}`);
 }, 60000); // Check every minute
+
+// Cache refresh timer (refresh every 5 minutes)
+setInterval(async () => {
+  try {
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Refreshing cache...`);
+    await getCachedSettings();
+    await getCachedOwnerAccounts();
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Cache refresh completed`);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Cache refresh failed:`, error);
+  }
+}, CACHE_TTL); // Refresh every 5 minutes
 
 // Generate unique buy-in ID
 function generateBuyinId(): string {
@@ -211,7 +306,7 @@ bot.command("start", async (ctx: MyContext) => {
     
     let settings;
     try {
-      settings = await getSettings();
+      settings = await getCachedSettings();
     } catch (error) {
       console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Google Sheets not configured, using defaults`);
       // Use default settings when Google Sheets is not configured
@@ -245,8 +340,8 @@ bot.callbackQuery("BUYIN", async (ctx: MyContext) => {
     let owners: any[] = [];
     
     try {
-      settings = await getSettings();
-      owners = await getOwnerAccounts();
+      settings = await getCachedSettings();
+      owners = await getCachedOwnerAccounts();
     } catch (error) {
       console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Google Sheets not configured, using defaults`);
       // Use default settings when Google Sheets is not configured
@@ -471,8 +566,8 @@ async function handleAmount(ctx: MyContext) {
     const amount = ctx.session.amount;
     if (!method || !amount || !ctx.from) return;
 
-    const settings = await getSettings();
-    const owners = await getOwnerAccounts();
+    const settings = await getCachedSettings();
+    const owners = await getCachedOwnerAccounts();
 
     const match = await findMatch(method, amount, owners, settings.OWNER_FALLBACK_THRESHOLD);
 
@@ -597,6 +692,8 @@ bot.callbackQuery(/^MARKPAID:(.+?):(\d+)$/, async (ctx: MyContext) => {
     if (rowIndex > 0) {
       try {
         await markRowPaid(rowIndex, fromId, iso);
+        // Invalidate cache since we updated the sheet
+        invalidateCache();
       } catch (e) {
         console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] markRowPaid failed:`, e);
         // Still proceed to update UI to avoid multiple clicks; loaders can fix sheet later
@@ -681,7 +778,7 @@ async function startWithdrawFlow(ctx: MyContext) {
     ctx.session.step = "WITHDRAW_METHOD";
     
     // Get owner accounts to see what payment methods are available
-    const owners = await getOwnerAccounts();
+    const owners = await getCachedOwnerAccounts();
     
     // Create keyboard with only available owner payment methods
     const kb = new InlineKeyboard();
@@ -842,6 +939,9 @@ async function handleWithdrawConfirm(ctx: MyContext) {
         requestTimestampISO,
         fromId
       );
+      
+      // Invalidate cache since we updated the sheet
+      invalidateCache();
       
       await ctx.answerCallbackQuery(MSG.withdrawConfirmSuccess);
       await ctx.editMessageText(truncateMessage(MSG.withdrawConfirmed(reqId, fromId)));
