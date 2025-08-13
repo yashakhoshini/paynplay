@@ -306,7 +306,8 @@ export function normalizeMethod(method: string): string {
   if (normalized === 'VENMO') return 'VENMO';
   if (normalized === 'CASHAPP' || normalized === 'CASH APP') return 'CASHAPP';
   if (normalized === 'CASH') return ''; // Exclude CASH method
-  return normalized; // pass-through for custom methods
+  if (normalized === 'BANK TRANSFER' || normalized === 'BANKTRANSFER') return ''; // Exclude Bank Transfer method
+  return normalized; // pass-through for other custom methods
 }
 
 // Helper function to check if a row represents an open cashout

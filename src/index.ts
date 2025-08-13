@@ -272,23 +272,7 @@ bot.on("my_chat_member", async (ctx: MyContext) => {
   if (!upd) return; // Type guard for strict TS
   const chatId = upd.chat.id;
   try {
-    const welcomeText = `🎰 **Pay-n-Play Bot is now active!**
-
-**For Players:**
-• Type /start to begin a buy-in
-• Type /help for instructions
-
-**For Loaders/Owners:**
-• Review payment screenshots in reply threads
-• Click "✅ Mark Paid" on transaction cards to confirm payments
-
-**How it works:**
-1. Player types /start and follows the prompts
-2. Bot posts transaction card to this group
-3. Player replies with payment screenshot
-4. Loader/Owner clicks Mark Paid to confirm
-
-`;
+    const welcomeText = `Hi 👋 — type /start here to buy in or type /help for instructions.`;
     
     // Send and try to pin the welcome message
     try {
@@ -315,7 +299,7 @@ if (PRIVACY_HINTS_ENABLED) {
       
       // Send gentle reminder
       try {
-        await ctx.reply(MSG.reminderFirstTime(BOT_USERNAME));
+        await ctx.reply('Hi 👋 — type /start here to buy in or type /help for instructions.');
       } catch (error) {
         console.error('Error sending first-time reminder:', error);
       }
@@ -323,27 +307,7 @@ if (PRIVACY_HINTS_ENABLED) {
   });
 }
 
-// Default message handler for guidance
-bot.on('message', async (ctx: MyContext) => {
-  // Only respond to text messages in private chats that aren't commands
-  if (ctx.chat?.type !== 'private' || !ctx.message?.text || ctx.message.text.startsWith('/')) {
-    return;
-  }
-  
-  // If user sends a regular message without using /start, guide them
-  if (!ctx.session.step) {
-    const guidanceText = `👋 Hi! I'm the Pay-n-Play Bot.
 
-To start a buy-in, please use one of these commands:
-
-• /start - Begin the payment process
-• /help - See detailed instructions
-
-I can't process regular messages - please use the commands above!`;
-    
-    await ctx.reply(guidanceText);
-  }
-});
 
 const app = express();
 app.use(express.json());

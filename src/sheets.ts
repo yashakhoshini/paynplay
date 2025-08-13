@@ -66,7 +66,8 @@ function normalizeMethod(m: string): string {
   if (x === 'VENMO') return 'VENMO';
   if (x === 'CASHAPP' || x === 'CASH APP') return 'CASHAPP';
   if (x === 'CASH') return ''; // Exclude CASH method
-  return x; // pass-through for custom methods (Bank Transfer, PayPal, etc.)
+  if (x === 'BANK TRANSFER' || x === 'BANKTRANSFER') return ''; // Exclude Bank Transfer method
+  return x; // pass-through for other custom methods (PayPal, etc.)
 }
 
 async function getFirstSheetMeta(svc: Sheets) {
