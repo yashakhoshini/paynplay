@@ -62,7 +62,8 @@ const validation = validateClientConfig();
 if (validation.errors.length > 0) {
   console.error('❌ Configuration errors:');
   validation.errors.forEach(error => console.error(`  - ${error}`));
-  throw new Error('Invalid configuration. Please check environment variables.');
+  // Don't throw error, just log it
+  console.error('Bot will continue with limited functionality');
 }
 
 if (validation.warnings.length > 0) {

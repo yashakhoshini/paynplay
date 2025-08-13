@@ -99,23 +99,28 @@ function isAuthorized(userId: number): boolean {
   return ALLOWED_USER_IDS.includes(userId);
 }
 
-// Validate bot token before creating bot instance
-if (!BOT_TOKEN) {
-  console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] ❌ CRITICAL ERROR: BOT_TOKEN is missing!`);
-  console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Please set the BOT_TOKEN environment variable.`);
-  console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Bot will not start without a valid token.`);
-  throw new Error('BOT_TOKEN is required');
+// Initialize bot function
+function initializeBot() {
+  // Validate bot token before creating bot instance
+  if (!BOT_TOKEN) {
+    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] ❌ CRITICAL ERROR: BOT_TOKEN is missing!`);
+    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Please set the BOT_TOKEN environment variable.`);
+    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Bot will not start without a valid token.`);
+    throw new Error('BOT_TOKEN is required');
+  }
+
+  if (!/^\d+:[A-Za-z0-9_-]+$/.test(BOT_TOKEN)) {
+    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] ❌ CRITICAL ERROR: BOT_TOKEN format is invalid!`);
+    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Token should be in format: number:alphanumeric`);
+    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Current token: ${BOT_TOKEN}`);
+    throw new Error('BOT_TOKEN format is invalid');
+  }
+
+  console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] ✓ Bot token validated successfully`);
+  return new Bot<MyContext>(BOT_TOKEN);
 }
 
-if (!/^\d+:[A-Za-z0-9_-]+$/.test(BOT_TOKEN)) {
-  console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] ❌ CRITICAL ERROR: BOT_TOKEN format is invalid!`);
-  console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Token should be in format: number:alphanumeric`);
-  console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Current token: ${BOT_TOKEN}`);
-  throw new Error('BOT_TOKEN format is invalid');
-}
-
-console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] ✓ Bot token validated successfully`);
-const bot = new Bot<MyContext>(BOT_TOKEN);
+const bot = initializeBot();
 
 // Add session middleware with timeout
 bot.use(session({ 
