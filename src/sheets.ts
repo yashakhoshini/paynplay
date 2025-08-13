@@ -59,15 +59,24 @@ async function retryApiCall<T>(
   throw lastError!;
 }
 
-const auth = new google.auth.GoogleAuth({
-  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  credentials: {
-    client_email: GOOGLE_CLIENT_EMAIL,
-    private_key: GOOGLE_PRIVATE_KEY
-  }
-});
+// Only create auth if credentials are provided
+let auth: google.auth.GoogleAuth | null = null;
+
+if (GOOGLE_CLIENT_EMAIL && GOOGLE_PRIVATE_KEY) {
+  auth = new google.auth.GoogleAuth({
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    credentials: {
+      client_email: GOOGLE_CLIENT_EMAIL,
+      private_key: GOOGLE_PRIVATE_KEY
+    }
+  });
+}
 
 async function client(): Promise<Sheets> {
+  if (!auth) {
+    throw new Error('Google Sheets credentials not configured');
+  }
+  
   try {
     const a = await auth.getClient();
     return google.sheets({ version: 'v4', auth: a as any });

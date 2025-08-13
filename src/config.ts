@@ -74,7 +74,7 @@ if (validation.warnings.length > 0) {
 
 // Required
 export const BOT_TOKEN = required('BOT_TOKEN');
-export const SHEET_ID  = required('SHEET_ID');
+export const SHEET_ID  = process.env.SHEET_ID || '';
 
 // Optional (strongly recommended)
 export const BASE_URL  = process.env.BASE_URL || '';
@@ -96,9 +96,9 @@ export const OWNER_FALLBACK_THRESHOLD = Number(process.env.OWNER_FALLBACK_THRESH
 export const MAX_BUYIN_AMOUNT = Number(process.env.MAX_BUYIN_AMOUNT || '10000');
 export const MIN_BUYIN_AMOUNT = Number(process.env.MIN_BUYIN_AMOUNT || '20');
 
-// Google Service Account (required for Sheets access)
-export const GOOGLE_CLIENT_EMAIL = required('GOOGLE_CLIENT_EMAIL');
-export const GOOGLE_PRIVATE_KEY = required('GOOGLE_PRIVATE_KEY').replace(/\\n/g, '\n');
+// Google Service Account (optional for testing)
+export const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL || '';
+export const GOOGLE_PRIVATE_KEY = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
 // Optional owner handles (used if no OwnerAccounts sheet)
 export const ZELLE_HANDLE   = process.env.ZELLE_HANDLE   || '';
