@@ -41,3 +41,9 @@ export const OWNER_IDS = process.env.OWNER_IDS || '';
 export const LOADER_IDS = process.env.LOADER_IDS || '';
 export const BOT_USERNAME = process.env.BOT_USERNAME || '';
 export const PRIVACY_HINTS_ENABLED = process.env.PRIVACY_HINTS_ENABLED !== 'false'; // default true
+
+// Parse allowed user IDs from environment variable
+export const ALLOWED_USER_IDS: number[] = (process.env.ALLOWED_USER_IDS || '')
+  .split(',')
+  .map(id => Number(id.trim()))
+  .filter(id => Number.isFinite(id) && id > 0);

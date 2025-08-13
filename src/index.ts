@@ -7,12 +7,12 @@ import {
   PORT,
   LOADER_GROUP_ID,
   BOT_USERNAME,
-  PRIVACY_HINTS_ENABLED
+  PRIVACY_HINTS_ENABLED,
+  ALLOWED_USER_IDS
 } from "./config.js";
 import { MSG } from "./messages.js";
 import { getSettings, getOwnerAccounts, markRowPaid } from "./sheets.js";
 import { findMatch } from "./matcher.js";
-import { isPrivileged } from "./roles.js";
 import { Transaction, GroupSession } from "./types.js";
 
 type SessionData = {
@@ -213,8 +213,13 @@ async function handleAmount(ctx: MyContext) {
 // Restricted Mark Paid handler
 bot.callbackQuery(/^MARKPAID:(.+?):(\d+)$/, async (ctx: MyContext) => {
   const fromId = ctx.from?.id;
-  if (!fromId || !isPrivileged(fromId)) {
-    await ctx.answerCallbackQuery({ text: MSG.notAuthorized, show_alert: true });
+  
+  // Check if user is in the allowed list
+  if (!fromId || !ALLOWED_USER_IDS.includes(fromId)) {
+    await ctx.answerCallbackQuery({ 
+      text: "You are not authorized to mark this payment as paid.", 
+      show_alert: true 
+    });
     return;
   }
 
