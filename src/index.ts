@@ -123,6 +123,15 @@ bot.catch((err) => {
   console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Bot error:`, err);
 });
 
+// Debug logging for all updates
+bot.on('message', (ctx) => {
+  console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Received message:`, {
+    from: ctx.from?.id,
+    text: ctx.message?.text,
+    chatType: ctx.chat?.type
+  });
+});
+
 // /ping for quick health check
 bot.command("ping", async (ctx: MyContext) => {
   try {
