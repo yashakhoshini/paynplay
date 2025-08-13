@@ -26,7 +26,7 @@ bot.command('start', async (ctx) => {
 
 // Start the bot with polling
 bot.start({
-  dropPendingUpdates: true,
+  drop_pending_updates: true,
   onStart: () => {
     console.log('✅ Bot started successfully with polling');
     console.log('📱 Send /start or /ping to test');

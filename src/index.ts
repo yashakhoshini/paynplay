@@ -918,10 +918,10 @@ if (BASE_URL && !isDevelopment) {
   
   // Delete any existing webhook first
   try {
-    await bot.api.deleteWebhook({ dropPendingUpdates: true });
+    await bot.api.deleteWebhook({ drop_pending_updates: true });
     console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Deleted existing webhook`);
   } catch (error) {
-    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] No webhook to delete or error:`, error.message);
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] No webhook to delete or error:`, (error as Error).message);
   }
   
   app.listen(PORT, () => {
@@ -930,7 +930,7 @@ if (BASE_URL && !isDevelopment) {
   
   // Start the bot with polling
   bot.start({
-    dropPendingUpdates: true,
+    drop_pending_updates: true,
     onStart: () => {
       console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] ✅ Bot started successfully with polling`);
     }
