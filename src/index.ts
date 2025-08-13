@@ -9,12 +9,17 @@ import {
   BOT_USERNAME,
   PRIVACY_HINTS_ENABLED,
   ALLOWED_USER_IDS,
+  EFFECTIVE_ALLOWED_USER_IDS,
   MAX_BUYIN_AMOUNT,
   MIN_BUYIN_AMOUNT,
   SESSION_TIMEOUT_MS,
   MAX_MESSAGE_LENGTH,
   CLIENT_NAME,
-  CLIENT_ID
+  CLIENT_ID,
+  ZELLE_HANDLE,
+  VENMO_HANDLE,
+  CASHAPP_HANDLE,
+  PAYPAL_HANDLE
 } from "./config.js";
 import { MSG } from "./messages.js";
 import { getSettings, getOwnerAccounts, markRowPaid, createPendingWithdrawal, getPendingWithdrawal, confirmWithdrawal } from "./sheets.js";
@@ -111,11 +116,28 @@ async function getCachedOwnerAccounts() {
     console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Owner accounts fetched from sheets (${Date.now() - startTime}ms)`);
     return owners;
   } catch (error) {
-    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Google Sheets not configured, using empty owners`);
-    sheetsCache.owners = [];
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Google Sheets not configured, using fallback owner accounts`);
+    // Use fallback owner accounts when Google Sheets is not configured
+    const fallbackOwners = [];
+    
+    // Only add methods that have handles configured
+    if (VENMO_HANDLE) {
+      fallbackOwners.push({ method: 'VENMO', handle: VENMO_HANDLE, display_name: 'Owner', instructions: 'Include note with payment' });
+    }
+    if (ZELLE_HANDLE) {
+      fallbackOwners.push({ method: 'ZELLE', handle: ZELLE_HANDLE, display_name: 'Owner', instructions: 'Include note with payment' });
+    }
+    if (CASHAPP_HANDLE) {
+      fallbackOwners.push({ method: 'CASHAPP', handle: CASHAPP_HANDLE, display_name: 'Owner', instructions: 'Include note with payment' });
+    }
+    if (PAYPAL_HANDLE) {
+      fallbackOwners.push({ method: 'PAYPAL', handle: PAYPAL_HANDLE, display_name: 'Owner', instructions: 'Include note with payment' });
+    }
+    
+    sheetsCache.owners = fallbackOwners;
     sheetsCache.lastUpdated = now;
-    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Owner accounts served from defaults (${Date.now() - startTime}ms)`);
-    return [];
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Owner accounts served from fallbacks (${Date.now() - startTime}ms) - Found ${fallbackOwners.length} methods`);
+    return fallbackOwners;
   }
 }
 
@@ -187,11 +209,15 @@ function truncateMessage(message: string, maxLength: number = MAX_MESSAGE_LENGTH
 
 // Enhanced authorization check
 function isAuthorized(userId: number): boolean {
-  if (!ALLOWED_USER_IDS || ALLOWED_USER_IDS.length === 0) {
+  if (!EFFECTIVE_ALLOWED_USER_IDS || EFFECTIVE_ALLOWED_USER_IDS.length === 0) {
     console.warn(`[${new Date().toISOString()}] [${CLIENT_NAME}] No authorized users configured`);
     return false;
   }
-  return ALLOWED_USER_IDS.includes(userId);
+  const isAllowed = EFFECTIVE_ALLOWED_USER_IDS.includes(userId);
+  if (!isAllowed) {
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Denied access: user ${userId} not in allowed list ${EFFECTIVE_ALLOWED_USER_IDS.join(',')}`);
+  }
+  return isAllowed;
 }
 
 // Initialize bot function

@@ -118,6 +118,14 @@ export const ALLOWED_USER_IDS: number[] = (process.env.ALLOWED_USER_IDS || '')
   .map(id => Number(id.trim()))
   .filter(id => Number.isFinite(id) && id > 0);
 
+// Dev bypass for testing (allows single user to approve when no ALLOWED_USER_IDS set)
+export const DEV_BYPASS_ID = Number(process.env.DEV_BYPASS_ID || '0');
+
+// Effective allowed users (includes dev bypass if no users configured)
+export const EFFECTIVE_ALLOWED_USER_IDS: number[] = ALLOWED_USER_IDS.length > 0 
+  ? ALLOWED_USER_IDS 
+  : (DEV_BYPASS_ID > 0 ? [DEV_BYPASS_ID] : []);
+
 // Rate limiting and performance settings
 export const SHEETS_RATE_LIMIT_MS = Number(process.env.SHEETS_RATE_LIMIT_MS || '1000');
 export const SESSION_TIMEOUT_MS = Number(process.env.SESSION_TIMEOUT_MS || '300000'); // 5 minutes
