@@ -9,11 +9,15 @@ export async function findMatch(
   ownerThreshold: number = OWNER_FALLBACK_THRESHOLD
 ): Promise<EnhancedMatchResult> {
 
+  console.log(`Looking for match: ${method} $${amount}`);
+  
   // 1) Try to match a cash-out in the sheet (respecting min $20 remainder rule)
   const cashouts = await getOpenCashouts();
+  console.log('All cashouts found:', cashouts);
 
   // Filter cashouts by method
   const matchingCashouts = cashouts.filter(co => co.method === method);
+  console.log(`Cashouts matching method ${method}:`, matchingCashouts);
   
   // Find exact match first (preferred)
   const exactMatch = matchingCashouts.find(co => co.amount === amount);

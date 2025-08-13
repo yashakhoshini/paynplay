@@ -204,6 +204,8 @@ export async function getOwnerAccounts(): Promise<OwnerAccount[]> {
 export async function getOpenCashouts(): Promise<CashoutRow[]> {
   const svc = await client();
   const { title } = await getFirstSheetMeta(svc);
+  console.log('Reading from sheet:', title);
+  
   const res = await svc.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
     range: `${title}!1:10000`,
@@ -211,10 +213,18 @@ export async function getOpenCashouts(): Promise<CashoutRow[]> {
   });
 
   const values = res.data.values || [];
-  if (values.length < 2) return []; // Need at least headers + 1 data row
+  console.log('Total rows in sheet:', values.length);
+  
+  if (values.length < 2) {
+    console.log('Not enough data in sheet');
+    return [];
+  }
 
   const headers = (values[0] || []).map(String);
+  console.log('Headers found:', headers);
+  
   const dataRows = values.slice(1); // Skip header row
+  console.log('Data rows:', dataRows.length);
 
   // Use universal schema mapper to infer column mappings
   const mapping = inferMapping(headers, dataRows);
@@ -222,11 +232,14 @@ export async function getOpenCashouts(): Promise<CashoutRow[]> {
 
   // Build canonical rows using the mapping
   const canonicalRows = buildCanonicalRows(dataRows, mapping);
+  console.log('Canonical rows built:', canonicalRows.length);
 
   // Filter for open cashouts
   const openCashouts: CashoutRow[] = [];
   for (const row of canonicalRows) {
+    console.log('Checking row:', row);
     if (isOpenCashout(row) && row.paymentMethod && row.amount) {
+      console.log('Found open cashout:', row);
       openCashouts.push({
         rowIndex: row.rowIndex,
         username: row.username || '',
@@ -238,6 +251,7 @@ export async function getOpenCashouts(): Promise<CashoutRow[]> {
     }
   }
 
+  console.log('Total open cashouts found:', openCashouts.length);
   return openCashouts;
 }
 

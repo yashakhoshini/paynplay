@@ -186,25 +186,39 @@ async function handleAmount(ctx: MyContext) {
 
   // 2) Post to loader group WITH Mark Paid button
   const groupId = Number(process.env.LOADER_GROUP_ID);
+  console.log('Loader group ID:', groupId, 'Is finite:', Number.isFinite(groupId));
+  
+  const kb = {
+    inline_keyboard: [
+      [{ text: "✅ Mark Paid", callback_data: `MARKPAID:${buyinId}:${match.type === "CASHOUT" ? match.rowIndex || 0 : 0}` }]
+    ]
+  };
+  
   if (Number.isFinite(groupId)) {
     try {
-      const kb = {
-        inline_keyboard: [
-          [{ text: "✅ Mark Paid", callback_data: `MARKPAID:${buyinId}:${match.type === "CASHOUT" ? match.rowIndex || 0 : 0}` }]
-        ]
-      };
       const text = MSG.groupCard(playerTag, amount, settings.CURRENCY, match.method, recv);
+      console.log('Posting to group:', groupId, 'with button:', JSON.stringify(kb));
       const sent = await bot.api.sendMessage(groupId, text, { parse_mode: "Markdown", reply_markup: kb });
 
       // Store group message info
       transaction.groupMessageId = sent.message_id;
       transaction.groupChatId = sent.chat.id;
       activeTransactions.set(buyinId, transaction);
+      console.log('Successfully posted transaction card to group');
 
     } catch (error) {
       console.error('Error posting to loader group:', error);
-      await ctx.reply('Warning: Could not post to loader group. Please contact support.');
+      // Fallback: post to private chat with button
+      const fallbackText = `🧾 *Transaction Card* (Group posting failed)\n\n` + MSG.groupCard(playerTag, amount, settings.CURRENCY, match.method, recv);
+      await ctx.reply(fallbackText, { parse_mode: "Markdown", reply_markup: kb });
+      console.log('Posted transaction card to private chat as fallback');
     }
+  } else {
+    console.log('No valid LOADER_GROUP_ID found, posting to private chat');
+    // Post to private chat with button if no group ID
+    const fallbackText = `🧾 *Transaction Card*\n\n` + MSG.groupCard(playerTag, amount, settings.CURRENCY, match.method, recv);
+    await ctx.reply(fallbackText, { parse_mode: "Markdown", reply_markup: kb });
+    console.log('Posted transaction card to private chat');
   }
 
   ctx.session = {}; // reset
