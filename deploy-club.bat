@@ -120,7 +120,7 @@ railway variables set PRIVACY_HINTS_ENABLED="true"
 
 REM Security and performance settings
 railway variables set MAX_BUYIN_AMOUNT="10000"
-railway variables set MIN_BUYIN_AMOUNT="1"
+railway variables set MIN_BUYIN_AMOUNT="20"
 railway variables set SHEETS_RATE_LIMIT_MS="1000"
 railway variables set SESSION_TIMEOUT_MS="300000"
 railway variables set MAX_MESSAGE_LENGTH="4096"

@@ -94,7 +94,7 @@ export const OWNER_FALLBACK_THRESHOLD = Number(process.env.OWNER_FALLBACK_THRESH
 
 // Amount limits for security
 export const MAX_BUYIN_AMOUNT = Number(process.env.MAX_BUYIN_AMOUNT || '10000');
-export const MIN_BUYIN_AMOUNT = Number(process.env.MIN_BUYIN_AMOUNT || '1');
+export const MIN_BUYIN_AMOUNT = Number(process.env.MIN_BUYIN_AMOUNT || '20');
 
 // Google Service Account (required for Sheets access)
 export const GOOGLE_CLIENT_EMAIL = required('GOOGLE_CLIENT_EMAIL');

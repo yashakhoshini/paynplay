@@ -118,7 +118,7 @@ This document summarizes all critical fixes implemented to address security vuln
 ```bash
 # Security and amount limits
 MAX_BUYIN_AMOUNT=10000
-MIN_BUYIN_AMOUNT=1
+MIN_BUYIN_AMOUNT=20
 
 # Performance and rate limiting
 SHEETS_RATE_LIMIT_MS=1000

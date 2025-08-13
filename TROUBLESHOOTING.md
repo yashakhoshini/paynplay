@@ -138,7 +138,7 @@
    - Consider adding explicit column mapping
 
 3. **Validate Amount Limits**:
-   - Check `MAX_BUYIN_AMOUNT` and `MIN_BUYIN_AMOUNT` settings
+   - Check `MAX_BUYIN_AMOUNT` and `MIN_BUYIN_AMOUNT` settings (min $20, max $10,000)
    - Ensure amounts are within configured limits
 
 ### **Authorization Issues**
