@@ -20,6 +20,7 @@ import { MSG } from "./messages.js";
 import { getSettings, getOwnerAccounts, markRowPaid, createPendingWithdrawal, getPendingWithdrawal, confirmWithdrawal } from "./sheets.js";
 import { findMatch } from "./matcher.js";
 import { Transaction, GroupSession } from "./types.js";
+import { SecurityValidator, logSecurityEvent } from "./security.js";
 
 type SessionData = {
   step?: "METHOD" | "AMOUNT" | "WITHDRAW_METHOD" | "WITHDRAW_AMOUNT" | "WITHDRAW_TAG";
@@ -47,8 +48,21 @@ setInterval(() => {
   const now = Date.now();
   const timeoutThreshold = now - SESSION_TIMEOUT_MS;
   
-  // Clean up expired sessions (this is handled by grammy internally, but we can add custom logic)
-  console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Session cleanup check completed`);
+  // Clean up expired transactions
+  for (const [buyinId, transaction] of activeTransactions.entries()) {
+    if (transaction.timestamp < timeoutThreshold) {
+      activeTransactions.delete(buyinId);
+      logSecurityEvent('EXPIRED_TRANSACTION_CLEANUP', transaction.playerId, buyinId);
+    }
+  }
+  
+  // Clean up expired group sessions
+  for (const [chatId, session] of groupSessions.entries()) {
+    // Group sessions don't have timestamps, so we'll keep them for now
+    // In a production system, you might want to add timestamps
+  }
+  
+  console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Session cleanup completed. Active transactions: ${activeTransactions.size}`);
 }, 60000); // Check every minute
 
 // Generate unique buy-in ID
@@ -64,21 +78,10 @@ function getGroupSession(chatId: number): GroupSession {
   return groupSessions.get(chatId)!;
 }
 
-// Validate amount with security limits
+// Use the secure validation from SecurityValidator
 function validateAmount(amount: number): { valid: boolean; error?: string } {
-  if (!Number.isFinite(amount) || amount <= 0) {
-    return { valid: false, error: 'Amount must be a positive number' };
-  }
-  
-  if (amount < MIN_BUYIN_AMOUNT) {
-    return { valid: false, error: `Minimum amount is $${MIN_BUYIN_AMOUNT}` };
-  }
-  
-  if (amount > MAX_BUYIN_AMOUNT) {
-    return { valid: false, error: `Maximum amount is $${MAX_BUYIN_AMOUNT}` };
-  }
-  
-  return { valid: true };
+  const result = SecurityValidator.validateAmount(amount);
+  return { valid: result.valid, error: result.error };
 }
 
 // Truncate message if too long
@@ -253,13 +256,23 @@ bot.callbackQuery(/METHOD_(.+)/, async (ctx: MyContext) => {
 // Pre-set amounts
 bot.callbackQuery(/AMT_(\d+)/, async (ctx: MyContext) => {
   try {
-    const amount = parseInt(ctx.match?.[1] || "0", 10);
-    const validation = validateAmount(amount);
+    // Rate limiting check
+    const rateLimit = SecurityValidator.checkRateLimit(ctx.from?.id || 0);
+    if (!rateLimit.allowed) {
+      await ctx.answerCallbackQuery({ 
+        text: `Rate limit exceeded. Please wait ${Math.ceil((rateLimit.resetTime! - Date.now()) / 1000)} seconds.`, 
+        show_alert: true 
+      });
+      return;
+    }
+    
+    const validation = SecurityValidator.validateAmount(ctx.match?.[1] || "0");
     if (!validation.valid) {
+      logSecurityEvent('INVALID_AMOUNT_CALLBACK', ctx.from?.id, ctx.match?.[1]);
       await ctx.answerCallbackQuery({ text: validation.error!, show_alert: true });
       return;
     }
-    ctx.session.amount = amount;
+    ctx.session.amount = validation.value!;
     await handleAmount(ctx);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Amount selection failed:`, error);
@@ -327,31 +340,53 @@ bot.callbackQuery(/WITHDRAW_CONFIRM_(.+)/, async (ctx: MyContext) => {
 bot.on("message:text", async (ctx: MyContext) => {
   try {
     if (ctx.session.step === "AMOUNT" && ctx.message?.text) {
-      const amt = parseFloat(ctx.message.text.trim());
-      const validation = validateAmount(amt);
+      // Rate limiting check
+      const rateLimit = SecurityValidator.checkRateLimit(ctx.from?.id || 0);
+      if (!rateLimit.allowed) {
+        await ctx.reply(`Rate limit exceeded. Please wait ${Math.ceil((rateLimit.resetTime! - Date.now()) / 1000)} seconds.`);
+        return;
+      }
+      
+      const validation = SecurityValidator.validateAmount(ctx.message.text);
       if (!validation.valid) {
+        logSecurityEvent('INVALID_AMOUNT_INPUT', ctx.from?.id, ctx.message.text);
         await ctx.reply(validation.error!);
         return;
       }
-      ctx.session.amount = amt;
+      ctx.session.amount = validation.value!;
       await handleAmount(ctx);
     } else if (ctx.session.step === "WITHDRAW_AMOUNT" && ctx.message?.text) {
-      const amt = parseFloat(ctx.message.text.trim());
-      const validation = validateAmount(amt);
+      // Rate limiting check
+      const rateLimit = SecurityValidator.checkRateLimit(ctx.from?.id || 0);
+      if (!rateLimit.allowed) {
+        await ctx.reply(`Rate limit exceeded. Please wait ${Math.ceil((rateLimit.resetTime! - Date.now()) / 1000)} seconds.`);
+        return;
+      }
+      
+      const validation = SecurityValidator.validateAmount(ctx.message.text);
       if (!validation.valid) {
+        logSecurityEvent('INVALID_WITHDRAW_AMOUNT', ctx.from?.id, ctx.message.text);
         await ctx.reply(validation.error!);
         return;
       }
-      ctx.session.amount = amt;
+      ctx.session.amount = validation.value!;
       ctx.session.step = "WITHDRAW_TAG";
       await ctx.reply(MSG.withdrawTagPrompt);
     } else if (ctx.session.step === "WITHDRAW_TAG" && ctx.message?.text) {
-      const tag = ctx.message.text.trim();
-      if (!tag) {
-        await ctx.reply("Please provide a valid payment tag.");
+      // Rate limiting check
+      const rateLimit = SecurityValidator.checkRateLimit(ctx.from?.id || 0);
+      if (!rateLimit.allowed) {
+        await ctx.reply(`Rate limit exceeded. Please wait ${Math.ceil((rateLimit.resetTime! - Date.now()) / 1000)} seconds.`);
         return;
       }
-      ctx.session.tag = tag;
+      
+      const tagValidation = SecurityValidator.validateAndSanitizeTag(ctx.message.text);
+      if (!tagValidation.valid) {
+        logSecurityEvent('INVALID_TAG_INPUT', ctx.from?.id, ctx.message.text);
+        await ctx.reply(tagValidation.error!);
+        return;
+      }
+      ctx.session.tag = tagValidation.value!;
       ctx.session.requestTimestampISO = new Date().toISOString();
       await showWithdrawSummary(ctx);
     }
@@ -454,9 +489,30 @@ async function handleAmount(ctx: MyContext) {
 bot.callbackQuery(/^MARKPAID:(.+?):(\d+)$/, async (ctx: MyContext) => {
   try {
     const fromId = ctx.from?.id;
+    if (!fromId) return;
+    
+    // Rate limiting check
+    const rateLimit = SecurityValidator.checkRateLimit(fromId);
+    if (!rateLimit.allowed) {
+      await ctx.answerCallbackQuery({ 
+        text: `Rate limit exceeded. Please wait ${Math.ceil((rateLimit.resetTime! - Date.now()) / 1000)} seconds.`, 
+        show_alert: true 
+      });
+      return;
+    }
+
+    // Validate callback data
+    const callbackData = ctx.callbackQuery?.data || '';
+    const validation = SecurityValidator.validateCallbackData(callbackData, /^MARKPAID:(.+?):(\d+)$/);
+    if (!validation.valid) {
+      logSecurityEvent('INVALID_MARKPAID_CALLBACK', fromId, callbackData);
+      await ctx.answerCallbackQuery({ text: "Invalid callback data", show_alert: true });
+      return;
+    }
     
     // Check if user is in the allowed list
-    if (!fromId || !isAuthorized(fromId)) {
+    if (!isAuthorized(fromId)) {
+      logSecurityEvent('UNAUTHORIZED_MARK_PAID_ATTEMPT', fromId, callbackData);
       await ctx.answerCallbackQuery({ 
         text: "You are not authorized to mark this payment as paid.", 
         show_alert: true 
