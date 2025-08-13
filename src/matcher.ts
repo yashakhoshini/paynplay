@@ -2,12 +2,22 @@ import { getOpenCashouts, markCashoutMatchedByRow } from './sheets.js';
 import { OWNER_FALLBACK_THRESHOLD } from './config.js';
 import { MatchResult, OwnerAccount, Method } from './types.js';
 
+// Enhanced match result with row information
+export interface EnhancedMatchResult {
+  type: 'CASHOUT' | 'OWNER';
+  amount: number;
+  method: string;
+  rowIndex?: number; // For CASHOUT matches
+  receiver?: string; // For CASHOUT matches
+  owner?: OwnerAccount; // For OWNER matches
+}
+
 export async function findMatch(
   method: string,
   amount: number,
   owners: OwnerAccount[],
   ownerThreshold: number = OWNER_FALLBACK_THRESHOLD
-): Promise<MatchResult> {
+): Promise<EnhancedMatchResult> {
 
   // 1) Try to match a cash-out in the sheet (respecting min $20 remainder rule)
   const cashouts = await getOpenCashouts();
@@ -20,23 +30,11 @@ export async function findMatch(
   if (exactMatch) {
     await markCashoutMatchedByRow(exactMatch.rowIndex, 'matched');
     return { 
-      type: 'CASHOUT', 
-      cashout: {
-        cashout_id: exactMatch.rowIndex.toString(),
-        tg_user_id: '',
-        display_name: exactMatch.username || '',
-        method: exactMatch.method as Method,
-        amount: exactMatch.amount,
-        priority_type: 'NORMAL',
-        status: 'MATCHED',
-        requested_at: new Date().toISOString(),
-        matched_at: new Date().toISOString(),
-        payer_tg_user_id: '',
-        payer_handle: '',
-        receiver_handle: exactMatch.receiver_handle || '',
-        notes: ''
-      },
-      amount 
+      type: 'CASHOUT',
+      amount: exactMatch.amount,
+      method: exactMatch.method,
+      rowIndex: exactMatch.rowIndex,
+      receiver: exactMatch.receiver_handle || undefined
     };
   }
   
@@ -58,23 +56,11 @@ export async function findMatch(
     const bestMatch = validPartialMatches[0];
     await markCashoutMatchedByRow(bestMatch.rowIndex, 'matched');
     return { 
-      type: 'CASHOUT', 
-      cashout: {
-        cashout_id: bestMatch.rowIndex.toString(),
-        tg_user_id: '',
-        display_name: bestMatch.username || '',
-        method: bestMatch.method as Method,
-        amount: bestMatch.amount,
-        priority_type: 'NORMAL',
-        status: 'MATCHED',
-        requested_at: new Date().toISOString(),
-        matched_at: new Date().toISOString(),
-        payer_tg_user_id: '',
-        payer_handle: '',
-        receiver_handle: bestMatch.receiver_handle || '',
-        notes: ''
-      },
-      amount 
+      type: 'CASHOUT',
+      amount: bestMatch.amount,
+      method: bestMatch.method,
+      rowIndex: bestMatch.rowIndex,
+      receiver: bestMatch.receiver_handle || undefined
     };
   }
 
@@ -83,11 +69,16 @@ export async function findMatch(
   if (amount >= ownerThreshold || !owner) {
     // fallback to any owner for that method (or first available)
     const fallback = owner || owners[0];
-    if (fallback) return { type: 'OWNER', method, owner: fallback, amount };
+    if (fallback) return { type: 'OWNER', method: fallback.method, amount, owner: fallback };
   }
 
   // Default to owner if nothing else
-  if (owners.length) return { type: 'OWNER', method, owner: owners[0], amount };
+  if (owners.length) return { type: 'OWNER', method: owners[0].method, amount, owner: owners[0] };
   // If truly no owner handle is present, we still return an OWNER type with dummy handle
-  return { type: 'OWNER', method, owner: { method, handle: '<ask owner for handle>', display_name: 'Owner', instructions: '' }, amount };
+  return { 
+    type: 'OWNER', 
+    method, 
+    amount, 
+    owner: { method, handle: '<ask owner for handle>', display_name: 'Owner', instructions: '' }
+  };
 }

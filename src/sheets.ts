@@ -11,6 +11,7 @@ import {
   GOOGLE_PRIVATE_KEY
 } from './config.js';
 import { OwnerAccount, UserRole } from './types.js';
+import { inferMapping, buildCanonicalRows, isOpenCashout, ColumnMapping, CanonicalRow } from './schemaMapper.js';
 
 type Sheets = sheets_v4.Sheets;
 
@@ -48,7 +49,7 @@ export type CashoutRow = {
   notes?: string;
 };
 
-function normalizeHeader(s: string) {
+function normalizeHeader(s: string): string {
   return s.trim().toLowerCase();
 }
 
@@ -98,9 +99,9 @@ export async function getSettings(): Promise<Settings> {
       }
       const methods = (map.get('METHODS_ENABLED') || DEFAULT_METHODS.join(','))
         .split(',')
-        .map(s => s.trim().toUpperCase())
+        .map((s: string) => s.trim().toUpperCase())
         .filter(Boolean)
-        .filter(method => method !== 'CASH'); // Explicitly exclude CASH
+        .filter((method: string) => method !== 'CASH'); // Explicitly exclude CASH
 
       return {
         CLUB_NAME: map.get('CLUB_NAME') || 'Club',
@@ -199,7 +200,7 @@ export async function getOwnerAccounts(): Promise<OwnerAccount[]> {
   return out;
 }
 
-// Read open cash-outs from ANY sheet layout (first sheet)
+// Read open cash-outs using universal schema mapper
 export async function getOpenCashouts(): Promise<CashoutRow[]> {
   const svc = await client();
   const { title } = await getFirstSheetMeta(svc);
@@ -210,75 +211,115 @@ export async function getOpenCashouts(): Promise<CashoutRow[]> {
   });
 
   const values = res.data.values || [];
+  if (values.length < 2) return []; // Need at least headers + 1 data row
+
   const headers = (values[0] || []).map(String);
-  const hmap = new Map(headers.map((h, i) => [normalizeHeader(h), i]));
+  const dataRows = values.slice(1); // Skip header row
 
-  // Figure out key columns
-  const idx = {
-    transactionType: hmap.get('transaction type') ?? hmap.get('type') ?? hmap.get('txn type'),
-    amount: hmap.get('amount') ?? hmap.get('amt'),
-    paymentMethod: hmap.get('payment method') ?? hmap.get('method'),
-    status: hmap.get('status'),
-    username: hmap.get('username') ?? hmap.get('user') ?? hmap.get('name'),
-    receiver: hmap.get('receiver_handle') ?? hmap.get('receiver') ?? hmap.get('payee') ?? hmap.get('handle')
-  };
+  // Use universal schema mapper to infer column mappings
+  const mapping = inferMapping(headers, dataRows);
+  console.log(`Sheet mapping confidence: ${mapping.confidence}%`, mapping.cols);
 
-  const out: CashoutRow[] = [];
-  for (let r = 1; r < values.length; r++) {
-    const row = values[r] || [];
-    const type = String(row[idx.transactionType ?? -1] ?? '').toLowerCase();
-    const status = String(row[idx.status ?? -1] ?? '').toLowerCase();
+  // Build canonical rows using the mapping
+  const canonicalRows = buildCanonicalRows(dataRows, mapping);
 
-    // treat as open cash-out if type includes 'cash' and 'out', and status is empty or 'pending'
-    const isCashout = /cash.?out/.test(type);
-    const isPending = !status || /pending|open|awaiting/i.test(status);
-    if (!isCashout || !isPending) continue;
-
-    const method = normalizeMethod(String(row[idx.paymentMethod ?? -1] ?? ''));
-    const amount = toNumber(String(row[idx.amount ?? -1] ?? '0'));
-    if (!method || !amount) continue;
-
-    out.push({
-      rowIndex: r + 1, // 1-based
-      username: String(row[idx.username ?? -1] ?? ''),
-      method,
-      amount,
-      status: status || 'pending',
-      receiver_handle: String(row[idx.receiver ?? -1] ?? '')
-    });
+  // Filter for open cashouts
+  const openCashouts: CashoutRow[] = [];
+  for (const row of canonicalRows) {
+    if (isOpenCashout(row) && row.paymentMethod && row.amount) {
+      openCashouts.push({
+        rowIndex: row.rowIndex,
+        username: row.username || '',
+        method: row.paymentMethod,
+        amount: row.amount,
+        status: row.status || 'pending',
+        receiver_handle: row.receiver || ''
+      });
+    }
   }
-  return out;
+
+  return openCashouts;
 }
 
 export async function markCashoutMatchedByRow(rowIndex: number, newStatus = 'matched'): Promise<void> {
+  await markRowPaid(rowIndex, 0, new Date().toISOString(), newStatus);
+}
+
+// Mark a row as paid with verification details
+export async function markRowPaid(
+  rowIndex: number, 
+  verifiedBy: number, 
+  verifiedAt: string, 
+  newStatus: string = 'paid'
+): Promise<void> {
   const svc = await client();
   const { title } = await getFirstSheetMeta(svc);
 
-  // Try to find a "Status" column; if not found, silently return.
+  // Get headers to find relevant columns
   const head = await svc.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
     range: `${title}!1:1`,
     valueRenderOption: 'UNFORMATTED_VALUE'
   });
   const headers = (head.data.values?.[0] || []).map(String);
-  const hmap = new Map(headers.map((h, i) => [normalizeHeader(h), i]));
-  const statusIdx = hmap.get('status');
-  if (statusIdx === undefined) return;
-
-  const colLetter = (i: number) => {
-    // 0-based index to letters
+  
+  // Use schema mapper to find column indices
+  const mapping = inferMapping(headers, []);
+  
+  // Helper function to convert column index to letter
+  const colLetter = (i: number): string => {
     let n = i + 1, s = '';
     while (n) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
     return s;
   };
-  const statusCol = colLetter(statusIdx);
 
-  await svc.spreadsheets.values.update({
-    spreadsheetId: SHEET_ID,
-    range: `${title}!${statusCol}${rowIndex}`,
-    valueInputOption: 'RAW',
-    requestBody: { values: [[newStatus]] }
-  });
+  // Update Status column if it exists
+  if (mapping.cols.status !== undefined) {
+    const statusCol = colLetter(mapping.cols.status);
+    try {
+      await svc.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${title}!${statusCol}${rowIndex}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[newStatus]] }
+      });
+      console.log(`Updated status to ${newStatus} at row ${rowIndex}`);
+    } catch (error) {
+      console.error('Failed to update status:', error);
+    }
+  }
+
+  // Update verified_by column if it exists
+  if (mapping.cols.verifiedBy !== undefined && verifiedBy > 0) {
+    const verifiedByCol = colLetter(mapping.cols.verifiedBy);
+    try {
+      await svc.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${title}!${verifiedByCol}${rowIndex}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[verifiedBy]] }
+      });
+      console.log(`Updated verified_by to ${verifiedBy} at row ${rowIndex}`);
+    } catch (error) {
+      console.error('Failed to update verified_by:', error);
+    }
+  }
+
+  // Update verified_at column if it exists
+  if (mapping.cols.verifiedAt !== undefined) {
+    const verifiedAtCol = colLetter(mapping.cols.verifiedAt);
+    try {
+      await svc.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${title}!${verifiedAtCol}${rowIndex}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[verifiedAt]] }
+      });
+      console.log(`Updated verified_at to ${verifiedAt} at row ${rowIndex}`);
+    } catch (error) {
+      console.error('Failed to update verified_at:', error);
+    }
+  }
 }
 
 // Back-compat shim for old code

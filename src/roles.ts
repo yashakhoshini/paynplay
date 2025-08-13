@@ -1,101 +1,22 @@
-import { getRolesFromSheet } from './sheets.js';
-import {
-  OWNER_IDS,
-  LOADER_IDS
-} from './config.js';
-
-export type Role = 'owner' | 'loader' | 'none';
-
-interface UserRole {
-  tg_user_id: number;
-  role: Role;
-  display_name?: string;
+// src/roles.ts
+export function parseIds(envVal?: string): number[] {
+  return (envVal || "")
+    .split(",")
+    .map(s => Number(s.trim()))
+    .filter(n => Number.isFinite(n));
 }
 
-// Cache for roles loaded from sheet
-let rolesCache: UserRole[] | null = null;
-let rolesCacheTime = 0;
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const OWNER_SET = new Set(parseIds(process.env.OWNER_IDS));
+const LOADER_SET = new Set(parseIds(process.env.LOADER_IDS));
 
-async function loadRoles(): Promise<UserRole[]> {
-  const now = Date.now();
-  
-  // Return cached roles if still valid
-  if (rolesCache && (now - rolesCacheTime) < CACHE_TTL) {
-    return rolesCache;
-  }
+export type UserRole = "owner" | "loader" | "none";
 
-  const roles: UserRole[] = [];
-
-  // Load from environment variables
-  const ownerIds = OWNER_IDS.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-  const loaderIds = LOADER_IDS.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-
-  // Add owners from env
-  for (const id of ownerIds) {
-    roles.push({ tg_user_id: id, role: 'owner' });
-  }
-
-  // Add loaders from env (but don't override owners)
-  for (const id of loaderIds) {
-    if (!roles.find(r => r.tg_user_id === id)) {
-      roles.push({ tg_user_id: id, role: 'loader' });
-    }
-  }
-
-  // Try to load from Roles sheet and merge
-  try {
-    const sheetRoles = await getRolesFromSheet();
-    for (const sheetRole of sheetRoles) {
-      const existingIndex = roles.findIndex(r => r.tg_user_id === sheetRole.tg_user_id);
-      if (existingIndex >= 0) {
-        // Update existing role (sheet takes precedence)
-        roles[existingIndex] = sheetRole;
-      } else {
-        // Add new role from sheet
-        roles.push(sheetRole);
-      }
-    }
-  } catch (error) {
-    console.log('Could not load roles from sheet:', error);
-  }
-
-  // Cache the results
-  rolesCache = roles;
-  rolesCacheTime = now;
-
-  return roles;
+export function getRole(tgId: number): UserRole {
+  if (OWNER_SET.has(tgId)) return "owner";
+  if (LOADER_SET.has(tgId)) return "loader";
+  return "none";
 }
 
-export async function isOwner(tgId: number): Promise<boolean> {
-  const roles = await loadRoles();
-  return roles.some(r => r.tg_user_id === tgId && r.role === 'owner');
-}
-
-export async function isLoader(tgId: number): Promise<boolean> {
-  const roles = await loadRoles();
-  return roles.some(r => r.tg_user_id === tgId && (r.role === 'loader' || r.role === 'owner'));
-}
-
-export async function isPrivileged(tgId: number): Promise<boolean> {
-  const roles = await loadRoles();
-  return roles.some(r => r.tg_user_id === tgId && (r.role === 'owner' || r.role === 'loader'));
-}
-
-export async function getRole(tgId: number): Promise<Role> {
-  const roles = await loadRoles();
-  const userRole = roles.find(r => r.tg_user_id === tgId);
-  return userRole?.role || 'none';
-}
-
-export async function getDisplayName(tgId: number): Promise<string | undefined> {
-  const roles = await loadRoles();
-  const userRole = roles.find(r => r.tg_user_id === tgId);
-  return userRole?.display_name;
-}
-
-// Clear cache (useful for testing or when roles change)
-export function clearRolesCache(): void {
-  rolesCache = null;
-  rolesCacheTime = 0;
-}
+export const isOwner = (id: number) => OWNER_SET.has(id);
+export const isLoader = (id: number) => LOADER_SET.has(id);
+export const isPrivileged = (id: number) => OWNER_SET.has(id) || LOADER_SET.has(id);

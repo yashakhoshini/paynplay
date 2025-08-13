@@ -10,7 +10,7 @@ import {
   PRIVACY_HINTS_ENABLED
 } from "./config.js";
 import { MSG } from "./messages.js";
-import { getSettings, getOwnerAccounts, markBuyinPaid } from "./sheets.js";
+import { getSettings, getOwnerAccounts, markRowPaid } from "./sheets.js";
 import { findMatch } from "./matcher.js";
 import { isPrivileged } from "./roles.js";
 import { Transaction, GroupSession } from "./types.js";
@@ -145,55 +145,37 @@ async function handleAmount(ctx: MyContext) {
   // Store transaction
   activeTransactions.set(buyinId, transaction);
 
-  // Reply to player in DM
-  if (match.type === 'CASHOUT') {
+  // 1) DM to player: NO button; instruction to send screenshot in group
+  const playerTag = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || "Player"} (${ctx.from?.id})`;
+  const recv = match.type === "CASHOUT" ? (match.receiver || "<ask recipient>") : match.owner?.handle || "<ask owner>";
+
+  if (match.type === "CASHOUT") {
     await ctx.reply(
-      MSG.matchedPay(amount, settings.CURRENCY, method, match.cashout.receiver_handle),
+      MSG.playerMatchedPay(match.amount, settings.CURRENCY, match.method, recv),
       { parse_mode: "Markdown" }
     );
   } else {
     await ctx.reply(
-      MSG.ownerPay(amount, settings.CURRENCY, method, match.owner.handle, match.owner.instructions),
+      MSG.playerOwnerPay(amount, settings.CURRENCY, match.method, match.owner?.handle || "<ask owner>", match.owner?.instructions),
       { parse_mode: "Markdown" }
     );
   }
 
-  // Post transaction card to loader group
-  if (LOADER_GROUP_ID) {
+  // 2) Post to loader group WITH Mark Paid button
+  const groupId = Number(process.env.LOADER_GROUP_ID);
+  if (Number.isFinite(groupId)) {
     try {
-      const playerName = ctx.from.username 
-        ? `@${ctx.from.username}` 
-        : `${ctx.from.first_name || 'Unknown'} (ID: ${ctx.from.id})`;
-      
-      const payeeHandle = match.type === 'CASHOUT' 
-        ? match.cashout.receiver_handle || '<ask recipient>'
-        : match.owner.handle;
-
-      const cardText = MSG.transactionCard(
-        playerName,
-        amount,
-        settings.CURRENCY,
-        method,
-        payeeHandle
-      );
-
-      const kb = new InlineKeyboard()
-        .text(MSG.markPaid, `MARKPAID:${buyinId}`)
-        .row()
-        .url(MSG.viewSheet, `https://docs.google.com/spreadsheets/d/${process.env.SHEET_ID}/edit`);
-
-      const groupMessage = await bot.api.sendMessage(
-        LOADER_GROUP_ID,
-        cardText,
-        { 
-          parse_mode: "Markdown",
-          reply_markup: kb
-        }
-      );
+      const kb = {
+        inline_keyboard: [
+          [{ text: "✅ Mark Paid", callback_data: `MARKPAID:${buyinId}:${match.type === "CASHOUT" ? match.rowIndex || 0 : 0}` }]
+        ]
+      };
+      const text = MSG.groupCard(playerTag, amount, settings.CURRENCY, match.method, recv);
+      const sent = await bot.api.sendMessage(groupId, text, { parse_mode: "Markdown", reply_markup: kb });
 
       // Store group message info
-      transaction.groupMessageId = groupMessage.message_id;
-      transaction.groupChatId = groupMessage.chat.id;
+      transaction.groupMessageId = sent.message_id;
+      transaction.groupChatId = sent.chat.id;
       activeTransactions.set(buyinId, transaction);
 
     } catch (error) {
@@ -205,89 +187,56 @@ async function handleAmount(ctx: MyContext) {
   ctx.session = {}; // reset
 }
 
-// Mark Paid with authorization check
-bot.callbackQuery(/^MARKPAID:(.+)$/, async (ctx: MyContext) => {
+// Restricted Mark Paid handler
+bot.callbackQuery(/^MARKPAID:(.+?):(\d+)$/, async (ctx: MyContext) => {
+  const fromId = ctx.from?.id;
+  if (!fromId || !isPrivileged(fromId)) {
+    await ctx.answerCallbackQuery({ text: MSG.notAuthorized, show_alert: true });
+    return;
+  }
+
   const buyinId = ctx.match?.[1];
-  if (!buyinId || !ctx.from) return;
+  const rowIndex = Number(ctx.match?.[2]); // 0 means owner route (no cashout row to mark)
 
-  const transaction = activeTransactions.get(buyinId);
-  if (!transaction) {
-    await ctx.answerCallbackQuery({ text: "Transaction not found or expired." });
-    return;
-  }
-
-  // Check if user is privileged
-  const privileged = await isPrivileged(ctx.from.id);
-  if (!privileged) {
-    await ctx.answerCallbackQuery({ 
-      show_alert: true, 
-      text: MSG.notAuthorized 
-    });
-    return;
-  }
-
-  try {
-    // Update the sheet
-    await markBuyinPaid(buyinId, ctx.from.id);
-
-    // Update the group message
-    const verifierName = ctx.from.username || ctx.from.first_name || `User${ctx.from.id}`;
-    const updatedText = `${transaction.groupMessageId ? 'Original message updated' : 'Transaction'} - ${MSG.paidConfirmed(verifierName, new Date().toISOString())}`;
-    
-    // Remove the button by editing the message
-    if (transaction.groupMessageId && transaction.groupChatId) {
-      try {
-        await bot.api.editMessageText(
-          transaction.groupChatId,
-          transaction.groupMessageId,
-          updatedText,
-          { parse_mode: "Markdown" }
-        );
-      } catch (error) {
-        console.error('Failed to update group message:', error);
-      }
+  // Update Google Sheet if a cashout row exists
+  const iso = new Date().toISOString();
+  if (rowIndex > 0) {
+    try {
+      await markRowPaid(rowIndex, fromId, iso);
+    } catch (e) {
+      console.error("markRowPaid failed:", e);
+      // Still proceed to update UI to avoid multiple clicks; loaders can fix sheet later
     }
-
-    await ctx.answerCallbackQuery({ text: "Payment confirmed! ✅" });
-    
-    // Clean up transaction
-    activeTransactions.delete(buyinId);
-
-  } catch (error) {
-    console.error('Error marking payment:', error);
-    await ctx.answerCallbackQuery({ 
-      show_alert: true, 
-      text: "Error confirming payment. Please try again." 
-    });
   }
+
+  // Edit the group card message to show confirmation and remove the button
+  const verifier = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || "Loader"} (${fromId})`;
+  try {
+    await ctx.editMessageText(MSG.paidConfirmed(verifier, iso), {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [] }
+    });
+  } catch (e) {
+    console.error("editMessageText failed:", e);
+  }
+
+  await ctx.answerCallbackQuery({ text: "Marked as paid ✅" });
 });
 
-// Group welcome message when bot is added
-bot.on('my_chat_member', async (ctx: MyContext) => {
+// Group onboarding (safe guard pattern)
+bot.on("my_chat_member", async (ctx: MyContext) => {
+  if (!("my_chat_member" in ctx.update)) return;
   const upd = ctx.update.my_chat_member;
-  if (!upd) return; // type guard for strict TS
-
-  if (upd.new_chat_member.status === 'member' || 
-      upd.new_chat_member.status === 'administrator') {
-    
-    const welcomeText = MSG.groupWelcome(BOT_USERNAME);
-    
-    try {
-      const message = await ctx.reply(welcomeText, { parse_mode: "Markdown" });
-      
-      // Try to pin the message if bot is admin
-      if (upd.new_chat_member.status === 'administrator') {
-        try {
-          await bot.api.pinChatMessage(upd.chat.id, message.message_id);
-        } catch (error) {
-          console.log('Could not pin message:', error);
-        }
-      } else {
-        await ctx.reply(MSG.adminPinRequest);
-      }
-    } catch (error) {
-      console.error('Error posting group welcome:', error);
-    }
+  const chatId = upd.chat.id;
+  try {
+    await ctx.api.sendMessage(
+      chatId,
+      `👋 I'm active here.\nPlayers: DM @${process.env.BOT_USERNAME || "this_bot"} or type /start.\nLoaders/Owners: review screenshots and tap Mark Paid on transaction cards.`
+    );
+    // Pin if admin:
+    // const m = await ctx.api.sendMessage(chatId, "..."); await ctx.api.pinChatMessage(chatId, m.message_id).catch(() => {});
+  } catch (e) {
+    console.error("my_chat_member welcome failed:", e);
   }
 });
 
@@ -313,28 +262,16 @@ if (PRIVACY_HINTS_ENABLED) {
 }
 
 const app = express();
-app.use(express.json()); // before mounting webhook
-app.get("/", (_, res) => res.send("OK"));
+app.use(express.json());
+app.get("/", (_req, res) => res.send("OK"));
 
 if (BASE_URL) {
-  // Add error handling for webhook
-  app.use(`/${BOT_TOKEN}`, (req, res, next) => {
-    console.log('Webhook received:', req.method, req.url);
-    next();
-  });
-  
-  app.use(`/${BOT_TOKEN}`, webhookCallback(bot as any, "express"));
-  
+  app.use(`/${BOT_TOKEN}`, webhookCallback(bot, "express"));
   app.listen(PORT, async () => {
-    console.log(`Server on :${PORT}`);
-    try {
-      const base = BASE_URL.replace(/\/+$/, ""); // strip trailing slashes
-      const webhookUrl = `${base}/${BOT_TOKEN}`;
-      await bot.api.setWebhook(webhookUrl);
-      console.log(`Webhook set to ${webhookUrl}`);
-    } catch (error) {
-      console.error('Failed to set webhook:', error);
-    }
+    const base = BASE_URL.replace(/\/+$/, "");
+    const url = `${base}/${BOT_TOKEN}`;
+    await bot.api.setWebhook(url);
+    console.log("Webhook set to", url);
   });
 } else {
   app.listen(PORT, () => {
