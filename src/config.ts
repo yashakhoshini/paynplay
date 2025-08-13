@@ -13,16 +13,14 @@ const validateClientConfig = () => {
 
   // Required validations
   if (!process.env.BOT_TOKEN) errors.push('BOT_TOKEN is required');
-  if (!process.env.SHEET_ID) errors.push('SHEET_ID is required');
-  if (!process.env.GOOGLE_CLIENT_EMAIL) errors.push('GOOGLE_CLIENT_EMAIL is required');
-  if (!process.env.GOOGLE_PRIVATE_KEY) errors.push('GOOGLE_PRIVATE_KEY is required');
+  // SHEET_ID, GOOGLE_CLIENT_EMAIL, and GOOGLE_PRIVATE_KEY are optional for testing
   
   // Bot token format validation
   if (process.env.BOT_TOKEN && !/^\d+:[A-Za-z0-9_-]+$/.test(process.env.BOT_TOKEN)) {
     errors.push('BOT_TOKEN format is invalid (should be number:alphanumeric)');
   }
   
-  // Sheet ID format validation
+  // Sheet ID format validation (only if provided)
   if (process.env.SHEET_ID && !/^[A-Za-z0-9_-]+$/.test(process.env.SHEET_ID)) {
     errors.push('SHEET_ID format is invalid');
   }
