@@ -9,7 +9,7 @@ A production-ready Telegram bot that routes buy-ins to either pending cash-outs 
 - **Min $20 remainder rule**: Ensures partial settlements leave either $0 or ≥$20 remaining
 - **Group workflow**: Posts transaction cards to loader group for verification
 - **Restricted Mark Paid**: Only owners/loaders can confirm payments
-- **ClubGG integration**: Optional webhook for auto-loading chips
+
 - **Flexible deployment**: Supports webhook on Railway and long polling locally
 - **Owner fallback**: Routes to owner when no match is found or amount exceeds threshold
 
@@ -52,7 +52,7 @@ A production-ready Telegram bot that routes buy-ins to either pending cash-outs 
 - `OWNER_IDS` - Comma-separated Telegram user IDs who count as owners
 - `LOADER_IDS` - Comma-separated Telegram user IDs who count as loaders
 - `BOT_USERNAME` - Bot username (without @), used in group mentions
-- `CLUBGG_WEBHOOK_URL` - Optional URL to call after Mark Paid for auto-loading
+
 - `PRIVACY_HINTS_ENABLED` - "true"/"false" (default "true") to post reminders in groups
 
 ## Setup Instructions
@@ -137,7 +137,7 @@ npm run dev
 7. Bot posts transaction card to loader group with "✅ Mark Paid" button
 8. Player posts screenshot proof in group
 9. Loader/Owner clicks "✅ Mark Paid" to confirm payment
-10. Sheet is updated and ClubGG webhook is called (if configured)
+10. Sheet is updated with payment confirmation
 
 ## Google Sheet Layout
 

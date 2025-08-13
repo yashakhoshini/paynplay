@@ -40,5 +40,4 @@ export const LOADER_GROUP_ID = process.env.LOADER_GROUP_ID || '';
 export const OWNER_IDS = process.env.OWNER_IDS || '';
 export const LOADER_IDS = process.env.LOADER_IDS || '';
 export const BOT_USERNAME = process.env.BOT_USERNAME || '';
-export const CLUBGG_WEBHOOK_URL = process.env.CLUBGG_WEBHOOK_URL || '';
 export const PRIVACY_HINTS_ENABLED = process.env.PRIVACY_HINTS_ENABLED !== 'false'; // default true

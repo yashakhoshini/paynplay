@@ -13,8 +13,8 @@ import { MSG } from "./messages.js";
 import { getSettings, getOwnerAccounts, markBuyinPaid } from "./sheets.js";
 import { findMatch } from "./matcher.js";
 import { isPrivileged } from "./roles.js";
-import { loadChips } from "./clubgg.js";
 import { Transaction, GroupSession } from "./types.js";
+import type { ChatMemberUpdatedContext } from "grammy";
 
 type SessionData = {
   step?: "METHOD" | "AMOUNT";
@@ -231,20 +231,6 @@ bot.callbackQuery(/^MARKPAID:(.+)$/, async (ctx: MyContext) => {
     // Update the sheet
     await markBuyinPaid(buyinId, ctx.from.id);
 
-    // Call ClubGG webhook (non-blocking)
-    loadChips({
-      buyinId,
-      amount: transaction.amount,
-      method: transaction.method,
-      playerId: transaction.playerId,
-      receiverHandle: transaction.match.type === 'CASHOUT' 
-        ? transaction.match.cashout.receiver_handle 
-        : transaction.match.owner.handle,
-      verifiedBy: ctx.from.id
-    }).catch(error => {
-      console.error('ClubGG webhook error:', error);
-    });
-
     // Update the group message
     const verifierName = ctx.from.username || ctx.from.first_name || `User${ctx.from.id}`;
     const updatedText = `${transaction.groupMessageId ? 'Original message updated' : 'Transaction'} - ${MSG.paidConfirmed(verifierName, new Date().toISOString())}`;
@@ -278,9 +264,12 @@ bot.callbackQuery(/^MARKPAID:(.+)$/, async (ctx: MyContext) => {
 });
 
 // Group welcome message when bot is added
-bot.on('my_chat_member', async (ctx) => {
-  if (ctx.chatMember.new_chat_member.status === 'member' || 
-      ctx.chatMember.new_chat_member.status === 'administrator') {
+bot.on('my_chat_member', async (ctx: ChatMemberUpdatedContext) => {
+  const upd = ctx.update.my_chat_member;
+  if (!upd) return; // type guard for strict TS
+
+  if (upd.new_chat_member.status === 'member' || 
+      upd.new_chat_member.status === 'administrator') {
     
     const welcomeText = MSG.groupWelcome(BOT_USERNAME);
     
@@ -288,9 +277,9 @@ bot.on('my_chat_member', async (ctx) => {
       const message = await ctx.reply(welcomeText, { parse_mode: "Markdown" });
       
       // Try to pin the message if bot is admin
-      if (ctx.chatMember.new_chat_member.status === 'administrator') {
+      if (upd.new_chat_member.status === 'administrator') {
         try {
-          await bot.api.pinChatMessage(ctx.chat.id, message.message_id);
+          await bot.api.pinChatMessage(upd.chat.id, message.message_id);
         } catch (error) {
           console.log('Could not pin message:', error);
         }

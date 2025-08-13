@@ -10,7 +10,7 @@ import {
   GOOGLE_CLIENT_EMAIL,
   GOOGLE_PRIVATE_KEY
 } from './config.js';
-import { OwnerAccount } from './types.js';
+import { OwnerAccount, UserRole } from './types.js';
 
 type Sheets = sheets_v4.Sheets;
 
