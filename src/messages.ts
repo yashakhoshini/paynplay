@@ -17,5 +17,34 @@ export const MSG = {
   amountQuickPicks: 'Select amount or enter custom:',
   processing: 'Processing your request...',
   buyinRecorded: 'Your buy-in has been recorded. Please complete the payment.',
-  paymentComplete: 'Payment marked as complete! Thank you.'
+  paymentComplete: 'Payment marked as complete! Thank you.',
+  
+  // New messages for group workflow
+  groupWelcome: (botUsername: string) => 
+    `🎰 **Pay-n-Play Bot Setup**\n\n` +
+    `**Players:** DM @${botUsername} or type /start here to begin a buy-in.\n\n` +
+    `**Loaders/Owners:** Verify screenshots and click Mark Paid on the transaction card.\n\n` +
+    `Reply to transaction cards with screenshot proof.`,
+  
+  notAuthorized: 'You\'re not authorized to confirm payments.',
+  
+  paidConfirmed: (verifier: string, isoTime: string) => 
+    `Paid ✓ by @${verifier} at ${new Date(isoTime).toLocaleString()}`,
+  
+  reminderFirstTime: (botUsername: string) => 
+    `Hi 👋 — you can DM me (@${botUsername}) or type /start here to buy in.`,
+  
+  transactionCard: (playerName: string, amount: number, currency: string, method: string, payeeHandle: string) =>
+    `💸 **Buy-In Request**\n\n` +
+    `**Player:** ${playerName}\n` +
+    `**Amount:** ${amount} ${currency}\n` +
+    `**Method:** ${method}\n` +
+    `**Pay to:** ${payeeHandle}\n\n` +
+    `Reply with screenshot proof, then click Mark Paid.`,
+  
+  viewSheet: '🗒 View Sheet',
+  
+  adminPinRequest: 'Admin can pin this message for visibility.',
+  
+  screenshotHint: 'Reply to this transaction card with the screenshot proof.'
 };

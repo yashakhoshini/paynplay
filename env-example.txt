@@ -20,4 +20,12 @@ ZELLE_HANDLE=your@email.com
 VENMO_HANDLE=@your_venmo_handle
 CASHAPP_HANDLE=$your_cashapp_handle
 
+# Group workflow settings
+LOADER_GROUP_ID=-1001234567890
+OWNER_IDS=123456789,987654321
+LOADER_IDS=111222333,444555666
+BOT_USERNAME=your_bot_username
+CLUBGG_WEBHOOK_URL=https://your-clubgg-webhook.com/autoload
+PRIVACY_HINTS_ENABLED=true
+
 

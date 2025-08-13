@@ -58,3 +58,28 @@ export interface MatchResultCashout {
 }
 
 export type MatchResult = MatchResultOwnerFallback | MatchResultCashout;
+
+// New types for group workflow
+export interface Transaction {
+  buyinId: string;
+  playerId: number;
+  playerUsername?: string;
+  playerFirstName?: string;
+  method: Method;
+  amount: number;
+  match: MatchResult;
+  timestamp: number;
+  groupMessageId?: number;
+  groupChatId?: number;
+}
+
+export interface UserRole {
+  tg_user_id: number;
+  role: 'owner' | 'loader' | 'none';
+  display_name?: string;
+}
+
+// Session data for tracking first-time users in groups
+export interface GroupSession {
+  firstTimeUsers: Set<number>; // user IDs who have been greeted
+}

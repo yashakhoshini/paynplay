@@ -285,3 +285,126 @@ export async function markCashoutMatchedByRow(rowIndex: number, newStatus = 'mat
 export async function markCashoutMatched(cashout_id: string, _payerId: number) {
   // now we mark by row instead of id; no-op here (matcher will call markCashoutMatchedByRow)
 }
+
+// Load roles from Roles sheet
+export async function getRolesFromSheet(): Promise<UserRole[]> {
+  const svc = await client();
+
+  try {
+    const res = await svc.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: 'Roles!A1:C999',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    const rows = res.data.values || [];
+    const headers = (rows[0] || []).map((h) => normalizeHeader(String(h)));
+    const idx = {
+      tg_user_id: headers.indexOf('tg_user_id'),
+      role: headers.indexOf('role'),
+      display_name: headers.indexOf('display_name')
+    };
+    
+    if (idx.tg_user_id === -1 || idx.role === -1) {
+      return [];
+    }
+
+    const out: UserRole[] = [];
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i] || [];
+      const tgUserId = Number(r[idx.tg_user_id]);
+      const role = String(r[idx.role] ?? '').toLowerCase();
+      
+      if (!tgUserId || isNaN(tgUserId) || !['owner', 'loader'].includes(role)) {
+        continue;
+      }
+      
+      out.push({
+        tg_user_id: tgUserId,
+        role: role as 'owner' | 'loader',
+        display_name: String(r[idx.display_name] ?? '')
+      });
+    }
+    return out;
+  } catch (_) {
+    // ignore (no Roles tab)
+    return [];
+  }
+}
+
+// Mark buy-in as paid with verification details
+export async function markBuyinPaid(
+  buyinId: string, 
+  verifiedBy: number, 
+  proofMsgId?: number, 
+  proofChatId?: number
+): Promise<void> {
+  const svc = await client();
+  const { title } = await getFirstSheetMeta(svc);
+
+  // Try to find relevant columns
+  const head = await svc.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `${title}!1:1`,
+    valueRenderOption: 'UNFORMATTED_VALUE'
+  });
+  const headers = (head.data.values?.[0] || []).map(String);
+  const hmap = new Map(headers.map((h, i) => [normalizeHeader(h), i]));
+
+  // Find buy-in row by ID
+  const res = await svc.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `${title}!1:10000`,
+    valueRenderOption: 'UNFORMATTED_VALUE'
+  });
+  const values = res.data.values || [];
+  
+  let buyinRowIndex = -1;
+  const buyinIdIdx = hmap.get('buyin_id') ?? hmap.get('buyin id') ?? hmap.get('id');
+  
+  if (buyinIdIdx !== undefined) {
+    for (let r = 1; r < values.length; r++) {
+      const row = values[r] || [];
+      if (String(row[buyinIdIdx] ?? '') === buyinId) {
+        buyinRowIndex = r + 1; // 1-based
+        break;
+      }
+    }
+  }
+
+  if (buyinRowIndex === -1) {
+    console.log(`Buy-in ${buyinId} not found in sheet`);
+    return;
+  }
+
+  // Update status and verification fields
+  const updates: Array<{ col: string; value: any }> = [
+    { col: 'status', value: 'paid' },
+    { col: 'verified_by', value: verifiedBy },
+    { col: 'verified_at', value: new Date().toISOString() }
+  ];
+
+  if (proofMsgId && proofChatId) {
+    updates.push({ col: 'proof_msg_id', value: proofMsgId });
+    updates.push({ col: 'proof_chat_id', value: proofChatId });
+  }
+
+  // Apply updates
+  for (const update of updates) {
+    const colIdx = hmap.get(update.col);
+    if (colIdx === undefined) continue; // Skip if column doesn't exist
+
+    const colLetter = (i: number) => {
+      let n = i + 1, s = '';
+      while (n) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
+      return s;
+    };
+    const col = colLetter(colIdx);
+
+    await svc.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID,
+      range: `${title}!${col}${buyinRowIndex}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [[update.value]] }
+    });
+  }
+}

@@ -9,34 +9,73 @@ export async function findMatch(
   ownerThreshold: number = OWNER_FALLBACK_THRESHOLD
 ): Promise<MatchResult> {
 
-  // 1) Try to match an exact cash-out in the sheet (FAST first handled externally in future)
+  // 1) Try to match a cash-out in the sheet (respecting min $20 remainder rule)
   const cashouts = await getOpenCashouts();
 
-  // sort: for now, oldest first (by row order) — you can evolve this to use Timestamp if present
-  for (const co of cashouts) {
-    if (co.method === method && co.amount === amount) {
-      // mark matched
-      await markCashoutMatchedByRow(co.rowIndex, 'matched');
-      return { 
-        type: 'CASHOUT', 
-        cashout: {
-          cashout_id: co.rowIndex.toString(),
-          tg_user_id: '',
-          display_name: co.username || '',
-          method: co.method as Method,
-          amount: co.amount,
-          priority_type: 'NORMAL',
-          status: 'MATCHED',
-          requested_at: new Date().toISOString(),
-          matched_at: new Date().toISOString(),
-          payer_tg_user_id: '',
-          payer_handle: '',
-          receiver_handle: co.receiver_handle || '',
-          notes: ''
-        },
-        amount 
-      };
-    }
+  // Filter cashouts by method
+  const matchingCashouts = cashouts.filter(co => co.method === method);
+  
+  // Find exact match first (preferred)
+  const exactMatch = matchingCashouts.find(co => co.amount === amount);
+  if (exactMatch) {
+    await markCashoutMatchedByRow(exactMatch.rowIndex, 'matched');
+    return { 
+      type: 'CASHOUT', 
+      cashout: {
+        cashout_id: exactMatch.rowIndex.toString(),
+        tg_user_id: '',
+        display_name: exactMatch.username || '',
+        method: exactMatch.method as Method,
+        amount: exactMatch.amount,
+        priority_type: 'NORMAL',
+        status: 'MATCHED',
+        requested_at: new Date().toISOString(),
+        matched_at: new Date().toISOString(),
+        payer_tg_user_id: '',
+        payer_handle: '',
+        receiver_handle: exactMatch.receiver_handle || '',
+        notes: ''
+      },
+      amount 
+    };
+  }
+  
+  // Find partial matches that respect min $20 remainder rule
+  const validPartialMatches = matchingCashouts.filter(co => {
+    const remainder = co.amount - amount;
+    // Allow if remainder is 0 (exact match) or >= 20
+    return remainder === 0 || remainder >= 20;
+  });
+  
+  // Sort by remainder (prefer smaller remainders, but still >= 20)
+  validPartialMatches.sort((a, b) => {
+    const remainderA = a.amount - amount;
+    const remainderB = b.amount - amount;
+    return remainderA - remainderB;
+  });
+  
+  if (validPartialMatches.length > 0) {
+    const bestMatch = validPartialMatches[0];
+    await markCashoutMatchedByRow(bestMatch.rowIndex, 'matched');
+    return { 
+      type: 'CASHOUT', 
+      cashout: {
+        cashout_id: bestMatch.rowIndex.toString(),
+        tg_user_id: '',
+        display_name: bestMatch.username || '',
+        method: bestMatch.method as Method,
+        amount: bestMatch.amount,
+        priority_type: 'NORMAL',
+        status: 'MATCHED',
+        requested_at: new Date().toISOString(),
+        matched_at: new Date().toISOString(),
+        payer_tg_user_id: '',
+        payer_handle: '',
+        receiver_handle: bestMatch.receiver_handle || '',
+        notes: ''
+      },
+      amount 
+    };
   }
 
   // 2) If amount is too large or no matches, route to owner

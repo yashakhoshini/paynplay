@@ -6,6 +6,10 @@ A production-ready Telegram bot that routes buy-ins to either pending cash-outs 
 
 - **Client-proof**: Works with any existing Google Sheet layout
 - **Smart matching**: Matches buy-ins to pending cash-outs by amount and payment method
+- **Min $20 remainder rule**: Ensures partial settlements leave either $0 or ≥$20 remaining
+- **Group workflow**: Posts transaction cards to loader group for verification
+- **Restricted Mark Paid**: Only owners/loaders can confirm payments
+- **ClubGG integration**: Optional webhook for auto-loading chips
 - **Flexible deployment**: Supports webhook on Railway and long polling locally
 - **Owner fallback**: Routes to owner when no match is found or amount exceeds threshold
 
@@ -42,6 +46,15 @@ A production-ready Telegram bot that routes buy-ins to either pending cash-outs 
 - `VENMO_HANDLE`
 - `CASHAPP_HANDLE` (optional)
 
+### Group workflow settings
+
+- `LOADER_GROUP_ID` - Numeric Telegram chat ID for the loader/owner group (required)
+- `OWNER_IDS` - Comma-separated Telegram user IDs who count as owners
+- `LOADER_IDS` - Comma-separated Telegram user IDs who count as loaders
+- `BOT_USERNAME` - Bot username (without @), used in group mentions
+- `CLUBGG_WEBHOOK_URL` - Optional URL to call after Mark Paid for auto-loading
+- `PRIVACY_HINTS_ENABLED` - "true"/"false" (default "true") to post reminders in groups
+
 ## Setup Instructions
 
 ### 1. Create a Google Service Account
@@ -66,7 +79,18 @@ A production-ready Telegram bot that routes buy-ins to either pending cash-outs 
 2. Share the sheet with your service account email (with Editor permissions)
 3. Copy the Sheet ID from the URL: `https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit`
 
-### 4. Local Development
+### 4. Set up Group Workflow
+
+1. **Create a loader group** in Telegram (owners + loaders + optional players)
+2. **Add the bot** to the group
+3. **Get the group ID**: Send a message in the group and visit `https://api.telegram.org/bot<BOT_TOKEN>/getUpdates` to find the `chat.id`
+4. **Set LOADER_GROUP_ID** to the numeric group ID (usually negative number like `-1001234567890`)
+5. **Configure OWNER_IDS and LOADER_IDS** with comma-separated Telegram user IDs
+6. **Set BOT_USERNAME** to your bot's username (without @)
+
+**Optional**: Disable privacy mode in BotFather (`/setprivacy` → "Turn off") to allow the bot to see non-command messages in groups for better onboarding.
+
+### 5. Local Development
 
 ```bash
 # Install dependencies
@@ -80,7 +104,7 @@ cp .env.example .env
 npm run dev
 ```
 
-### 5. Railway Deployment
+### 6. Railway Deployment
 
 1. Connect your GitHub repo to Railway
 2. Set environment variables in Railway dashboard:
@@ -104,13 +128,16 @@ npm run dev
 
 ### User Flow
 
-1. User sends `/start`
+1. User sends `/start` (in DM or group)
 2. Bot shows welcome message with "💸 Buy-In" button
 3. User clicks Buy-In → shows payment methods
 4. User selects method → shows amount options ($25, $50, $75, $100, $200, Custom)
 5. User selects amount → bot tries to match with pending cash-out
-6. If matched: shows receiver handle + "✅ Mark Paid" button
-7. If not matched: routes to owner + "✅ Mark Paid" button
+6. Bot replies to player with payment instructions
+7. Bot posts transaction card to loader group with "✅ Mark Paid" button
+8. Player posts screenshot proof in group
+9. Loader/Owner clicks "✅ Mark Paid" to confirm payment
+10. Sheet is updated and ClubGG webhook is called (if configured)
 
 ## Google Sheet Layout
 
@@ -141,6 +168,14 @@ If no dedicated tabs, bot infers from first sheet:
 - Treats rows with "cash out" in Transaction Type as cash-outs
 - Treats empty/pending/open Status as pending
 
+### Roles Sheet (Optional)
+If a tab named "Roles" exists with headers:
+- `tg_user_id` (number) - Telegram user ID
+- `role` (owner|loader) - User role
+- `display_name` (optional) - Display name
+
+These roles are merged with environment variables (sheet takes precedence).
+
 ## Troubleshooting
 
 ### Common Errors
@@ -163,7 +198,9 @@ If no dedicated tabs, bot infers from first sheet:
 1. Hit `/` → should return "OK"
 2. Send `/ping` in Telegram → should return "pong ✅"
 3. Send `/start` → should show welcome + Buy-In button
-4. Complete buy-in flow → should either match or route to owner
+4. Complete buy-in flow → should post to loader group
+5. Test Mark Paid authorization → only privileged users can confirm
+6. Add bot to group → should post welcome message
 
 ## Development
 
