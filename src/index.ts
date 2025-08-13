@@ -20,12 +20,12 @@ import {
   VENMO_HANDLE,
   CASHAPP_HANDLE,
   PAYPAL_HANDLE
-} from "./config.js";
-import { MSG } from "./messages.js";
-import { getSettings, getOwnerAccounts, markRowPaid, createPendingWithdrawal, getPendingWithdrawal, confirmWithdrawal } from "./sheets.js";
-import { findMatch } from "./matcher.js";
-import { Transaction, GroupSession } from "./types.js";
-import { SecurityValidator, logSecurityEvent } from "./security.js";
+} from "./config";
+import { MSG } from "./messages";
+import { getSettings, getOwnerAccounts, markRowPaid, createPendingWithdrawal, getPendingWithdrawal, confirmWithdrawal } from "./sheets";
+import { findMatch } from "./matcher";
+import { Transaction, GroupSession } from "./types";
+import { SecurityValidator, logSecurityEvent } from "./security";
 
 type SessionData = {
   step?: "METHOD" | "AMOUNT" | "WITHDRAW_METHOD" | "WITHDRAW_AMOUNT" | "WITHDRAW_TAG";
