@@ -30,7 +30,7 @@ A production-ready Telegram bot that routes buy-ins to either pending cash-outs 
 
 - `BASE_URL` - e.g., https://<app>.up.railway.app (when present, use webhook; else long polling)
 - `PORT` - default 8080
-- `METHODS_ENABLED_DEFAULT` - e.g., ZELLE,VENMO,CASHAPP
+- `METHODS_ENABLED_DEFAULT` - e.g., ZELLE,VENMO
 - `CURRENCY_DEFAULT` - default USD
 - `FAST_FEE_PCT_DEFAULT` - default 0.02
 - `OWNER_FALLBACK_THRESHOLD` - default 999999 (send to owner when amount ≥ this or no match)
@@ -40,7 +40,7 @@ A production-ready Telegram bot that routes buy-ins to either pending cash-outs 
 
 - `ZELLE_HANDLE`
 - `VENMO_HANDLE`
-- `CASHAPP_HANDLE`
+- `CASHAPP_HANDLE` (optional)
 
 ## Setup Instructions
 
@@ -120,7 +120,7 @@ The bot is client-proof and works with various sheet layouts:
 If present, should have columns:
 - `key` | `value`
 - `CLUB_NAME` | Your Club Name
-- `METHODS_ENABLED` | ZELLE,VENMO,CASHAPP
+- `METHODS_ENABLED` | ZELLE,VENMO
 - `CURRENCY` | USD
 - `FAST_FEE_PCT` | 0.02
 - `OWNER_FALLBACK_THRESHOLD` | 999999

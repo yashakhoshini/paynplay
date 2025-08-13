@@ -19,7 +19,8 @@ export const OWNER_TG_USERNAME = process.env.OWNER_TG_USERNAME || ''; // e.g. ya
 export const DEFAULT_METHODS = (process.env.METHODS_ENABLED_DEFAULT || 'ZELLE,VENMO')
   .split(',')
   .map(s => s.trim().toUpperCase())
-  .filter(Boolean);
+  .filter(Boolean)
+  .filter(method => method !== 'CASH'); // Explicitly exclude CASH
 
 export const DEFAULT_CURRENCY = process.env.CURRENCY_DEFAULT || 'USD';
 export const DEFAULT_FAST_FEE = Number(process.env.FAST_FEE_PCT_DEFAULT || '0.02');

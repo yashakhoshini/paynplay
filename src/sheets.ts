@@ -64,6 +64,7 @@ function normalizeMethod(m: string): string {
   if (x === 'ZELLE') return 'ZELLE';
   if (x === 'VENMO') return 'VENMO';
   if (x === 'CASHAPP' || x === 'CASH APP') return 'CASHAPP';
+  if (x === 'CASH') return ''; // Exclude CASH method
   return x; // pass-through for custom methods (Bank Transfer, PayPal, etc.)
 }
 
@@ -98,7 +99,8 @@ export async function getSettings(): Promise<Settings> {
       const methods = (map.get('METHODS_ENABLED') || DEFAULT_METHODS.join(','))
         .split(',')
         .map(s => s.trim().toUpperCase())
-        .filter(Boolean);
+        .filter(Boolean)
+        .filter(method => method !== 'CASH'); // Explicitly exclude CASH
 
       return {
         CLUB_NAME: map.get('CLUB_NAME') || 'Club',
