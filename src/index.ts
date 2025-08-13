@@ -263,7 +263,6 @@ bot.on("my_chat_member", async (ctx: MyContext) => {
 **For Players:**
 • Type /start to begin a buy-in
 • Type /help for instructions
-• Or DM @${process.env.BOT_USERNAME || "this_bot"} directly
 
 **For Loaders/Owners:**
 • Review payment screenshots in reply threads
@@ -275,7 +274,7 @@ bot.on("my_chat_member", async (ctx: MyContext) => {
 3. Player replies with payment screenshot
 4. Loader/Owner clicks Mark Paid to confirm
 
-**Need help?** Type /help for detailed instructions.`;
+`;
     
     // Send and try to pin the welcome message
     try {
