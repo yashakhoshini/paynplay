@@ -71,7 +71,7 @@ if (validation.warnings.length > 0) {
 }
 
 // Required
-export const BOT_TOKEN = required('BOT_TOKEN');
+export const BOT_TOKEN = process.env.BOT_TOKEN || '';
 export const SHEET_ID  = process.env.SHEET_ID || '';
 
 // Optional (strongly recommended)
