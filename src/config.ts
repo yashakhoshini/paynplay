@@ -121,6 +121,35 @@ export const ALLOWED_USER_IDS: number[] = (process.env.ALLOWED_USER_IDS || '')
 // Dev bypass for testing (allows single user to approve when no ALLOWED_USER_IDS set)
 export const DEV_BYPASS_ID = Number(process.env.DEV_BYPASS_ID || '0');
 
+// Real-club ops multi-tenant configuration
+export const METHODS_CIRCLE = (process.env.METHODS_CIRCLE || 'VENMO,ZELLE')
+  .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+
+export const METHODS_EXTERNAL_LINK = (process.env.METHODS_EXTERNAL_LINK || 'CARD,CASHAPP,APPLEPAY')
+  .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+
+export const STRIPE_CHECKOUT_URL = process.env.STRIPE_CHECKOUT_URL || '';
+
+export const WITHDRAW_STALE_HOURS = Number(process.env.WITHDRAW_STALE_HOURS || '24');
+
+export const FIXED_WALLETS_JSON = process.env.FIXED_WALLETS_JSON || '{}';
+// Example JSON:
+// {"PAYPAL":"ConnorRobinson794","BTC":"bc1...","ETH":"0x2f26...","LTC":"ltc1...",
+//  "USDT_ERC20":"0x2f26...","USDT_TRC20":"TCA6...","XRP":"rNohT...","SOL":"Djw27..."}
+
+export const FIXED_WALLETS: Record<string,string> = (() => {
+  try { return JSON.parse(FIXED_WALLETS_JSON); } catch { return {}; }
+})();
+
+// Enhanced authorization helper with dev bypass
+const rawAllowed = (process.env.ALLOWED_USER_IDS || process.env.ALLOWED_LOADERS || '')
+  .split(',').map(s => s.trim()).filter(Boolean).map(Number);
+const EFFECTIVE_ALLOWED = rawAllowed.length ? rawAllowed : (DEV_BYPASS_ID ? [DEV_BYPASS_ID] : []);
+
+export function isAuthorized(userId: number) {
+  return EFFECTIVE_ALLOWED.includes(userId);
+}
+
 // Effective allowed users (includes dev bypass if no users configured)
 export const EFFECTIVE_ALLOWED_USER_IDS: number[] = ALLOWED_USER_IDS.length > 0 
   ? ALLOWED_USER_IDS 

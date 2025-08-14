@@ -1,5 +1,5 @@
-import { getOpenCashouts, markCashoutMatchedByRow } from './sheets.js';
-import { OWNER_FALLBACK_THRESHOLD, MAX_BUYIN_AMOUNT, MIN_BUYIN_AMOUNT } from './config.js';
+import { getOpenCashouts, markCashoutMatchedByRow, updateWithdrawalStatus } from './sheets.js';
+import { OWNER_FALLBACK_THRESHOLD, MAX_BUYIN_AMOUNT, MIN_BUYIN_AMOUNT, METHODS_CIRCLE } from './config.js';
 // Rate limiting for Google Sheets API calls
 let lastApiCall = 0;
 const RATE_LIMIT_MS = 1000; // 1 second between calls
@@ -26,6 +26,61 @@ function validateAmount(amount) {
     }
     return { valid: true };
 }
+// New function to get circle withdrawals for matching
+async function getCircleWithdrawals() {
+    try {
+        const { google } = await import('googleapis');
+        const { SHEET_ID, GOOGLE_CLIENT_EMAIL, GOOGLE_PRIVATE_KEY } = await import('./config.js');
+        if (!GOOGLE_CLIENT_EMAIL || !GOOGLE_PRIVATE_KEY) {
+            console.log('Google Sheets not configured, returning empty circle withdrawals');
+            return [];
+        }
+        const auth = new google.auth.GoogleAuth({
+            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+            credentials: {
+                client_email: GOOGLE_CLIENT_EMAIL,
+                private_key: GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n')
+            }
+        });
+        const svc = google.sheets({ version: 'v4', auth: await auth.getClient() });
+        const res = await svc.spreadsheets.values.get({
+            spreadsheetId: SHEET_ID,
+            range: 'Withdrawals!A2:L'
+        });
+        const rows = res.data.values || [];
+        const circleWithdrawals = [];
+        for (const row of rows) {
+            const status = row[9]; // status column
+            const payoutType = row[10]; // payout_type column
+            // Only consider QUEUED withdrawals with CIRCLE payout type
+            if (status === 'QUEUED' && payoutType === 'CIRCLE') {
+                circleWithdrawals.push({
+                    request_id: row[0],
+                    user_id: row[1],
+                    username: row[2],
+                    method: row[4],
+                    amount: Number(row[3]),
+                    payment_tag_or_address: row[5],
+                    request_timestamp_iso: row[6],
+                    status: row[9],
+                    payout_type: row[10]
+                });
+            }
+        }
+        // Sort by request_timestamp_iso ASC (oldest first)
+        circleWithdrawals.sort((a, b) => {
+            const timeA = new Date(a.request_timestamp_iso).getTime();
+            const timeB = new Date(b.request_timestamp_iso).getTime();
+            return timeA - timeB;
+        });
+        console.log(`[${new Date().toISOString()}] Retrieved ${circleWithdrawals.length} circle withdrawals`);
+        return circleWithdrawals;
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] Failed to get circle withdrawals:`, error);
+        return [];
+    }
+}
 export async function findMatch(method, amount, owners, ownerThreshold = OWNER_FALLBACK_THRESHOLD) {
     console.log(`[${new Date().toISOString()}] Looking for match: ${method} $${amount}`);
     // Validate amount first
@@ -44,6 +99,55 @@ export async function findMatch(method, amount, owners, ownerThreshold = OWNER_F
         console.error(`[${new Date().toISOString()}] Invalid owners array provided`);
         throw new Error('Invalid owners configuration');
     }
+    // Check if this is a circle method - get from settings if available
+    let isCircleMethod = METHODS_CIRCLE.includes(method.toUpperCase());
+    // Try to get settings to override env defaults
+    try {
+        const { getSettings } = await import('./sheets.js');
+        const settings = await getSettings();
+        isCircleMethod = settings.METHODS_CIRCLE.includes(method.toUpperCase());
+    }
+    catch (error) {
+        // Use env defaults if settings unavailable
+        console.log(`[${new Date().toISOString()}] Using env METHODS_CIRCLE defaults`);
+    }
+    if (isCircleMethod) {
+        // Use new circle matching logic
+        console.log(`[${new Date().toISOString()}] Using circle matching for method: ${method}`);
+        try {
+            const circleWithdrawals = await getCircleWithdrawals();
+            // Filter by method
+            const matchingWithdrawals = circleWithdrawals.filter(w => w.method === method);
+            console.log(`[${new Date().toISOString()}] Circle withdrawals matching method ${method}: ${matchingWithdrawals.length}`);
+            if (matchingWithdrawals.length > 0) {
+                // Take the oldest withdrawal (already sorted by request_timestamp_iso ASC)
+                const oldestWithdrawal = matchingWithdrawals[0];
+                console.log(`[${new Date().toISOString()}] Matched with oldest circle withdrawal: ${oldestWithdrawal.request_id}`);
+                // Mark the withdrawal as matched
+                try {
+                    await updateWithdrawalStatus(oldestWithdrawal.request_id, 'PAID', 'Matched with deposit');
+                    console.log(`[${new Date().toISOString()}] Successfully marked circle withdrawal ${oldestWithdrawal.request_id} as PAID`);
+                    return {
+                        type: 'CASHOUT',
+                        amount: oldestWithdrawal.amount,
+                        method: oldestWithdrawal.method,
+                        rowIndex: 0, // Not used for circle withdrawals
+                        receiver: oldestWithdrawal.payment_tag_or_address
+                    };
+                }
+                catch (error) {
+                    console.error(`[${new Date().toISOString()}] Failed to mark circle withdrawal as paid:`, error);
+                    // Continue to owner fallback
+                }
+            }
+        }
+        catch (error) {
+            console.error(`[${new Date().toISOString()}] Circle matching failed:`, error);
+            // Continue to owner fallback
+        }
+    }
+    // Fallback to original logic for non-circle methods or when circle matching fails
+    console.log(`[${new Date().toISOString()}] Using original matching logic`);
     // 1) Get all open cashouts with error handling
     let cashouts;
     try {

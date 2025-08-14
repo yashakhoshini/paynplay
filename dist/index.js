@@ -1,11 +1,11 @@
 import { Bot, session, InlineKeyboard } from "grammy";
 import express from "express";
 import { webhookCallback } from "grammy";
-import { BOT_TOKEN, BASE_URL, PORT, PRIVACY_HINTS_ENABLED, EFFECTIVE_ALLOWED_USER_IDS, MAX_BUYIN_AMOUNT, MIN_BUYIN_AMOUNT, SESSION_TIMEOUT_MS, MAX_MESSAGE_LENGTH, CLIENT_NAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE } from "./config";
-import { MSG } from "./messages";
-import { getSettings, getOwnerAccounts, markRowPaid, createPendingWithdrawal, getPendingWithdrawal, confirmWithdrawal } from "./sheets";
-import { findMatch } from "./matcher";
-import { SecurityValidator, logSecurityEvent } from "./security";
+import { BOT_TOKEN, BASE_URL, PORT, PRIVACY_HINTS_ENABLED, EFFECTIVE_ALLOWED_USER_IDS, MAX_BUYIN_AMOUNT, MIN_BUYIN_AMOUNT, SESSION_TIMEOUT_MS, MAX_MESSAGE_LENGTH, CLIENT_NAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE, METHODS_EXTERNAL_LINK, STRIPE_CHECKOUT_URL, WITHDRAW_STALE_HOURS, FIXED_WALLETS } from "./config.js";
+import { MSG } from "./messages.js";
+import { getSettings, getOwnerAccounts, markRowPaid, createPendingWithdrawal, getPendingWithdrawal, confirmWithdrawal, appendWithdrawalRow, appendOwnerPayout, appendExternalDeposit, upsertLedger, getLedgerBalance, markStaleCashAppCircleWithdrawals, markOwnerPayoutPaid } from "./sheets.js";
+import { findMatch } from "./matcher.js";
+import { SecurityValidator, logSecurityEvent } from "./security.js";
 function initial() {
     return { lastActivity: Date.now() };
 }
@@ -126,6 +126,15 @@ setInterval(async () => {
         console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Cache refresh failed:`, error);
     }
 }, CACHE_TTL); // Refresh every 5 minutes
+// Stale sweeper timer (every 10 minutes)
+setInterval(async () => {
+    try {
+        await markStaleCashAppCircleWithdrawals(WITHDRAW_STALE_HOURS);
+    }
+    catch (e) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Stale sweep failed:`, e);
+    }
+}, 10 * 60 * 1000); // Every 10 minutes
 // Generate unique buy-in ID
 function generateBuyinId() {
     return `B-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -277,9 +286,13 @@ bot.command("start", async (ctx) => {
             };
         }
         const kb = new InlineKeyboard()
-            .text("💸 Buy-In", "BUYIN")
+            .text("💵 Buy-In", "BUYIN")
             .row()
-            .text("💰 Withdraw", "WITHDRAW");
+            .text("💸 Withdraw", "WITHDRAW");
+        if (settings.STRIPE_CHECKOUT_URL) {
+            kb.row().url('🔗 Pay via Link', settings.STRIPE_CHECKOUT_URL)
+                .row().text('🧾 Log External Deposit', 'EXTERNAL_DEPOSIT_LOG');
+        }
         await ctx.reply(truncateMessage(MSG.welcome(settings.CLUB_NAME ?? "our club")), {
             reply_markup: kb,
         });
@@ -346,6 +359,29 @@ bot.callbackQuery(/METHOD_(.+)/, async (ctx) => {
         const method = ctx.match?.[1];
         if (!method)
             return;
+        const upper = method.toUpperCase();
+        // Get settings to check method types
+        let settings;
+        try {
+            settings = await getCachedSettings();
+        }
+        catch (error) {
+            console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to get settings, using env defaults`);
+            settings = {
+                METHODS_EXTERNAL_LINK: METHODS_EXTERNAL_LINK,
+                STRIPE_CHECKOUT_URL: STRIPE_CHECKOUT_URL
+            };
+        }
+        // Check if this is an external link method
+        if (settings.METHODS_EXTERNAL_LINK.includes(upper) && settings.STRIPE_CHECKOUT_URL) {
+            const kb = new InlineKeyboard()
+                .url('Open Checkout', settings.STRIPE_CHECKOUT_URL)
+                .row()
+                .text('🧾 Log External Deposit', 'EXTERNAL_DEPOSIT_LOG');
+            await ctx.editMessageText('Use the link to pay. You can optionally log your payment for records:', { reply_markup: kb });
+            return;
+        }
+        // For circle methods, proceed with normal flow
         ctx.session.method = method;
         ctx.session.step = "AMOUNT";
         const kb = new InlineKeyboard()
@@ -407,6 +443,96 @@ bot.callbackQuery("WITHDRAW", async (ctx) => {
     }
     catch (error) {
         console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Withdraw button failed:`, error);
+        await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
+    }
+});
+// Withdrawal channel selection
+bot.callbackQuery("WITHDRAW_START", async (ctx) => {
+    try {
+        const kb = new InlineKeyboard()
+            .text('Venmo', 'WD_CH_VENMO').text('Zelle', 'WD_CH_ZELLE').row()
+            .text('PayPal', 'WD_CH_PAYPAL').text('Crypto', 'WD_CH_CRYPTO');
+        await ctx.editMessageText('Choose your withdrawal channel:', { reply_markup: kb });
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Withdrawal channel selection failed:`, error);
+        await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
+    }
+});
+// Circle withdrawal channels
+bot.callbackQuery(/^WD_CH_(VENMO|ZELLE)$/, async (ctx) => {
+    try {
+        const method = ctx.match?.[1];
+        if (!method)
+            return;
+        ctx.session.payoutType = 'CIRCLE';
+        ctx.session.method = method;
+        ctx.session.step = "WITHDRAW_AMOUNT";
+        await ctx.editMessageText(MSG.withdrawAmountPrompt);
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Circle withdrawal channel selection failed:`, error);
+        await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
+    }
+});
+// PayPal owner payout
+bot.callbackQuery('WD_CH_PAYPAL', async (ctx) => {
+    try {
+        ctx.session.payoutType = 'OWNER';
+        ctx.session.channel = 'PAYPAL';
+        ctx.session.step = "WITHDRAW_AMOUNT";
+        const ownerHandle = FIXED_WALLETS.PAYPAL || 'Owner';
+        await ctx.editMessageText(`PayPal withdrawal will be sent to: ${ownerHandle}\n\n${MSG.withdrawAmountPrompt}`);
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] PayPal withdrawal setup failed:`, error);
+        await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
+    }
+});
+// Crypto withdrawal
+bot.callbackQuery('WD_CH_CRYPTO', async (ctx) => {
+    try {
+        const coins = ['BTC', 'ETH', 'LTC', 'USDT_ERC20', 'USDT_TRC20', 'XRP', 'SOL'].filter(c => !!FIXED_WALLETS[c]);
+        if (coins.length === 0) {
+            await ctx.editMessageText('No crypto wallets configured. Please contact support.');
+            return;
+        }
+        ctx.session.payoutType = 'OWNER';
+        ctx.session.channel = 'CRYPTO';
+        ctx.session.step = "CRYPTO_COIN";
+        const kb = new InlineKeyboard();
+        for (let i = 0; i < coins.length; i += 2) {
+            const row = coins.slice(i, i + 2);
+            if (row.length === 1) {
+                kb.text(row[0], `CRYPTO_${row[0]}`);
+            }
+            else {
+                kb.text(row[0], `CRYPTO_${row[0]}`).text(row[1], `CRYPTO_${row[1]}`);
+            }
+            if (i + 2 < coins.length) {
+                kb.row();
+            }
+        }
+        await ctx.editMessageText('Choose your crypto currency:', { reply_markup: kb });
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Crypto withdrawal setup failed:`, error);
+        await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
+    }
+});
+// Crypto coin selection
+bot.callbackQuery(/^CRYPTO_(.+)$/, async (ctx) => {
+    try {
+        const coin = ctx.match?.[1];
+        if (!coin)
+            return;
+        ctx.session.cryptoCoin = coin;
+        ctx.session.step = "WITHDRAW_AMOUNT";
+        const walletAddress = FIXED_WALLETS[coin] || 'Unknown';
+        await ctx.editMessageText(`${coin} withdrawal will be sent to: ${walletAddress}\n\n${MSG.withdrawAmountPrompt}`);
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Crypto coin selection failed:`, error);
         await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
     }
 });
@@ -478,8 +604,23 @@ bot.on("message:text", async (ctx) => {
                 return;
             }
             ctx.session.amount = validation.value;
-            ctx.session.step = "WITHDRAW_TAG";
-            await ctx.reply(MSG.withdrawTagPrompt);
+            // Check if this is a circle withdrawal (needs tag) or owner payout (doesn't need tag)
+            if (ctx.session.payoutType === 'CIRCLE') {
+                ctx.session.step = "WITHDRAW_TAG";
+                await ctx.reply(MSG.withdrawTagPrompt);
+            }
+            else if (ctx.session.payoutType === 'OWNER') {
+                // For owner payouts, we need the user's wallet address (for crypto) or just proceed
+                if (ctx.session.channel === 'CRYPTO') {
+                    ctx.session.step = "CRYPTO_ADDRESS";
+                    await ctx.reply('Please enter your wallet address:');
+                }
+                else {
+                    // PayPal doesn't need additional info
+                    ctx.session.requestTimestampISO = new Date().toISOString();
+                    await showWithdrawSummary(ctx);
+                }
+            }
         }
         else if (ctx.session.step === "WITHDRAW_TAG" && ctx.message?.text) {
             // Rate limiting check
@@ -497,6 +638,69 @@ bot.on("message:text", async (ctx) => {
             ctx.session.tag = tagValidation.value;
             ctx.session.requestTimestampISO = new Date().toISOString();
             await showWithdrawSummary(ctx);
+        }
+        else if (ctx.session.step === "CRYPTO_ADDRESS" && ctx.message?.text) {
+            // Rate limiting check
+            const rateLimit = SecurityValidator.checkRateLimit(ctx.from?.id || 0);
+            if (!rateLimit.allowed) {
+                await ctx.reply(`Rate limit exceeded. Please wait ${Math.ceil((rateLimit.resetTime - Date.now()) / 1000)} seconds.`);
+                return;
+            }
+            // Basic validation for crypto address
+            if (ctx.message.text.length < 10) {
+                await ctx.reply('Please enter a valid wallet address.');
+                return;
+            }
+            ctx.session.cryptoAddress = ctx.message.text;
+            ctx.session.requestTimestampISO = new Date().toISOString();
+            await showWithdrawSummary(ctx);
+        }
+        else if (ctx.session.step === "EXTERNAL_AMOUNT" && ctx.message?.text) {
+            // Rate limiting check
+            const rateLimit = SecurityValidator.checkRateLimit(ctx.from?.id || 0);
+            if (!rateLimit.allowed) {
+                await ctx.reply(`Rate limit exceeded. Please wait ${Math.ceil((rateLimit.resetTime - Date.now()) / 1000)} seconds.`);
+                return;
+            }
+            const validation = SecurityValidator.validateAmount(ctx.message.text);
+            if (!validation.valid) {
+                logSecurityEvent('INVALID_EXTERNAL_AMOUNT', ctx.from?.id, ctx.message.text);
+                await ctx.reply(validation.error);
+                return;
+            }
+            ctx.session.externalAmount = validation.value;
+            ctx.session.step = "EXTERNAL_REFERENCE";
+            await ctx.reply('Please enter a reference (optional - payment ID, note, etc.):');
+        }
+        else if (ctx.session.step === "EXTERNAL_REFERENCE" && ctx.message?.text) {
+            // Rate limiting check
+            const rateLimit = SecurityValidator.checkRateLimit(ctx.from?.id || 0);
+            if (!rateLimit.allowed) {
+                await ctx.reply(`Rate limit exceeded. Please wait ${Math.ceil((rateLimit.resetTime - Date.now()) / 1000)} seconds.`);
+                return;
+            }
+            ctx.session.externalReference = ctx.message.text;
+            // Log the external deposit
+            try {
+                const entryId = `ext_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+                const username = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || ""} ${ctx.from?.last_name || ""}`.trim();
+                await appendExternalDeposit({
+                    entry_id: entryId,
+                    user_id: ctx.from?.id || 0,
+                    username,
+                    amount_usd: ctx.session.externalAmount || 0,
+                    method: 'EXTERNAL',
+                    reference: ctx.session.externalReference,
+                    created_at_iso: new Date().toISOString(),
+                    recorded_by_user_id: ctx.from?.id || 0
+                });
+                await ctx.reply(`✅ External deposit logged successfully!\nAmount: $${ctx.session.externalAmount}\nReference: ${ctx.session.externalReference}`);
+            }
+            catch (error) {
+                console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error logging external deposit:`, error);
+                await ctx.reply('Error logging external deposit. Please try again.');
+            }
+            ctx.session = {}; // Reset session
         }
     }
     catch (error) {
@@ -762,8 +966,8 @@ async function handleWithdrawSubmit(ctx) {
     try {
         if (!ctx.from)
             return;
-        const { method, amount, tag, requestTimestampISO } = ctx.session;
-        if (!method || !amount || !tag || !requestTimestampISO) {
+        const { method, amount, tag, requestTimestampISO, payoutType, channel, cryptoCoin } = ctx.session;
+        if (!amount || !requestTimestampISO) {
             await ctx.answerCallbackQuery({ text: "Missing withdrawal information. Please start over with /withdraw", show_alert: true });
             return;
         }
@@ -771,37 +975,129 @@ async function handleWithdrawSubmit(ctx) {
         const requestId = `wd_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
         const username = ctx.from.username ? `@${ctx.from.username}` : `${ctx.from.first_name || ""} ${ctx.from.last_name || ""}`.trim();
         try {
-            // Create pending withdrawal
-            await createPendingWithdrawal(requestId, ctx.from.id, username, amount, method, tag, requestTimestampISO);
-            await ctx.answerCallbackQuery();
-            await ctx.editMessageText(MSG.withdrawSubmitted);
-            // Send approval card to loaders group
-            const groupId = Number(process.env.LOADER_GROUP_ID);
-            if (Number.isFinite(groupId)) {
-                const card = truncateMessage(MSG.withdrawCard(requestId, username, ctx.from.id, method, amount, tag, requestTimestampISO));
-                const kb = {
-                    inline_keyboard: [[{ text: "✅ Confirm Withdrawal", callback_data: `WITHDRAW_CONFIRM_${requestId}` }]]
-                };
-                try {
-                    await bot.api.sendMessage(groupId, card, {
-                        parse_mode: "Markdown",
-                        reply_markup: kb
-                    });
+            if (payoutType === 'CIRCLE') {
+                // Circle withdrawal - use existing flow
+                if (!method || !tag) {
+                    await ctx.answerCallbackQuery({ text: "Missing withdrawal information. Please start over with /withdraw", show_alert: true });
+                    return;
                 }
-                catch (error) {
-                    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error posting withdrawal request to group:`, error);
-                    // Fallback: post to private chat
-                    const fallbackText = `🧾 *Withdrawal Request* (Group posting failed)\n\n` + card;
-                    await ctx.reply(fallbackText, { parse_mode: "Markdown", reply_markup: kb });
+                await createPendingWithdrawal(requestId, ctx.from.id, username, amount, method, tag, requestTimestampISO);
+                await ctx.answerCallbackQuery();
+                await ctx.editMessageText(MSG.withdrawSubmitted);
+                // Send approval card to loaders group
+                const groupId = Number(process.env.LOADER_GROUP_ID);
+                if (Number.isFinite(groupId)) {
+                    const card = truncateMessage(MSG.withdrawCard(requestId, username, ctx.from.id, method, amount, tag, requestTimestampISO));
+                    const kb = {
+                        inline_keyboard: [[{ text: "✅ Confirm Withdrawal", callback_data: `WITHDRAW_CONFIRM_${requestId}` }]]
+                    };
+                    try {
+                        await bot.api.sendMessage(groupId, card, {
+                            parse_mode: "Markdown",
+                            reply_markup: kb
+                        });
+                    }
+                    catch (error) {
+                        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error posting withdrawal request to group:`, error);
+                        // Fallback: post to private chat
+                        const fallbackText = `🧾 *Withdrawal Request* (Group posting failed)\n\n` + card;
+                        await ctx.reply(fallbackText, { parse_mode: "Markdown", reply_markup: kb });
+                    }
+                }
+                else {
+                    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] No valid LOADER_GROUP_ID found, posting withdrawal request to private chat`);
+                    const card = truncateMessage(MSG.withdrawCard(requestId, username, ctx.from.id, method, amount, tag, requestTimestampISO));
+                    const kb = {
+                        inline_keyboard: [[{ text: "✅ Confirm Withdrawal", callback_data: `WITHDRAW_CONFIRM_${requestId}` }]]
+                    };
+                    await ctx.reply(card, { parse_mode: "Markdown", reply_markup: kb });
                 }
             }
-            else {
-                console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] No valid LOADER_GROUP_ID found, posting withdrawal request to private chat`);
-                const card = truncateMessage(MSG.withdrawCard(requestId, username, ctx.from.id, method, amount, tag, requestTimestampISO));
-                const kb = {
-                    inline_keyboard: [[{ text: "✅ Confirm Withdrawal", callback_data: `WITHDRAW_CONFIRM_${requestId}` }]]
-                };
-                await ctx.reply(card, { parse_mode: "Markdown", reply_markup: kb });
+            else if (payoutType === 'OWNER') {
+                // Owner payout
+                const payoutId = `op_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+                if (channel === 'PAYPAL') {
+                    // PayPal owner payout
+                    await appendOwnerPayout({
+                        payout_id: payoutId,
+                        user_id: ctx.from.id,
+                        username,
+                        amount_usd: amount,
+                        channel: 'PAYPAL',
+                        owner_wallet_or_handle: FIXED_WALLETS.PAYPAL || 'Owner',
+                        request_timestamp_iso: requestTimestampISO,
+                        status: 'QUEUED'
+                    });
+                    // Mirror in Withdrawals
+                    await appendWithdrawalRow({
+                        request_id: requestId,
+                        user_id: ctx.from.id,
+                        username,
+                        amount_usd: amount,
+                        method: 'PAYPAL',
+                        payment_tag_or_address: FIXED_WALLETS.PAYPAL || 'Owner',
+                        request_timestamp_iso: requestTimestampISO,
+                        status: 'QUEUED',
+                        payout_type: 'OWNER'
+                    });
+                }
+                else if (channel === 'CRYPTO' && cryptoCoin) {
+                    // Crypto owner payout
+                    await appendOwnerPayout({
+                        payout_id: payoutId,
+                        user_id: ctx.from.id,
+                        username,
+                        amount_usd: amount,
+                        channel: cryptoCoin,
+                        owner_wallet_or_handle: FIXED_WALLETS[cryptoCoin] || 'Unknown',
+                        request_timestamp_iso: requestTimestampISO,
+                        status: 'QUEUED'
+                    });
+                    // Mirror in Withdrawals
+                    await appendWithdrawalRow({
+                        request_id: requestId,
+                        user_id: ctx.from.id,
+                        username,
+                        amount_usd: amount,
+                        method: cryptoCoin,
+                        payment_tag_or_address: FIXED_WALLETS[cryptoCoin] || 'Unknown',
+                        request_timestamp_iso: requestTimestampISO,
+                        status: 'QUEUED',
+                        payout_type: 'OWNER'
+                    });
+                }
+                await ctx.answerCallbackQuery();
+                await ctx.editMessageText('Owner payout request submitted successfully.');
+                // Send approval card to loaders group
+                const groupId = Number(process.env.LOADER_GROUP_ID);
+                if (Number.isFinite(groupId)) {
+                    const destination = channel === 'CRYPTO' ? (cryptoCoin ? FIXED_WALLETS[cryptoCoin] : 'Unknown') : FIXED_WALLETS.PAYPAL;
+                    const card = `🧾 *Owner Payout Request*\n\nUser: ${username} (${ctx.from.id})\nAmount: $${amount}\nChannel: ${channel === 'CRYPTO' ? cryptoCoin : channel}\nDestination: ${destination}\n\nRequest ID: ${payoutId}`;
+                    const kb = {
+                        inline_keyboard: [[{ text: "✅ Mark Owner Paid", callback_data: `WD_OWNER_PAID_${payoutId}` }]]
+                    };
+                    try {
+                        await bot.api.sendMessage(groupId, card, {
+                            parse_mode: "Markdown",
+                            reply_markup: kb
+                        });
+                    }
+                    catch (error) {
+                        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error posting owner payout request to group:`, error);
+                        // Fallback: post to private chat
+                        const fallbackText = `🧾 *Owner Payout Request* (Group posting failed)\n\n` + card;
+                        await ctx.reply(fallbackText, { parse_mode: "Markdown", reply_markup: kb });
+                    }
+                }
+                else {
+                    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] No valid LOADER_GROUP_ID found, posting owner payout request to private chat`);
+                    const destination = channel === 'CRYPTO' ? (cryptoCoin ? FIXED_WALLETS[cryptoCoin] : 'Unknown') : FIXED_WALLETS.PAYPAL;
+                    const card = `🧾 *Owner Payout Request*\n\nUser: ${username} (${ctx.from.id})\nAmount: $${amount}\nChannel: ${channel === 'CRYPTO' ? cryptoCoin : channel}\nDestination: ${destination}\n\nRequest ID: ${payoutId}`;
+                    const kb = {
+                        inline_keyboard: [[{ text: "✅ Mark Owner Paid", callback_data: `WD_OWNER_PAID_${payoutId}` }]]
+                    };
+                    await ctx.reply(card, { parse_mode: "Markdown", reply_markup: kb });
+                }
             }
         }
         catch (error) {
@@ -857,6 +1153,155 @@ async function handleWithdrawConfirm(ctx) {
 function generateWithdrawId() {
     return `wd_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
 }
+// External deposit logging
+bot.callbackQuery('EXTERNAL_DEPOSIT_LOG', async (ctx) => {
+    try {
+        ctx.session.step = "EXTERNAL_AMOUNT";
+        await ctx.editMessageText('Please enter the amount you paid:');
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] External deposit log setup failed:`, error);
+        await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
+    }
+});
+// Owner payout confirmation
+bot.callbackQuery(/^WD_OWNER_PAID:(.+)$/, async (ctx) => {
+    try {
+        const fromId = ctx.from?.id;
+        if (!fromId)
+            return;
+        // Check if user is authorized
+        if (!isAuthorized(fromId)) {
+            await ctx.answerCallbackQuery({ text: "Not authorized.", show_alert: true });
+            return;
+        }
+        const payoutId = ctx.match?.[1];
+        if (!payoutId)
+            return;
+        try {
+            await markOwnerPayoutPaid(payoutId, fromId, 'Marked as paid by admin');
+            // Update the message to show confirmation
+            const verifier = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || "Admin"} (${fromId})`;
+            await ctx.editMessageText(`✅ Owner payout marked as paid by ${verifier} at ${new Date().toISOString()}`, {
+                reply_markup: { inline_keyboard: [] }
+            });
+            await ctx.answerCallbackQuery({ text: "Owner payout marked as paid ✅" });
+        }
+        catch (error) {
+            console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error marking owner payout paid:`, error);
+            await ctx.answerCallbackQuery({ text: "Error marking payout as paid. Please try again.", show_alert: true });
+        }
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Owner payout confirmation failed:`, error);
+        await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
+    }
+});
+// Ledger commands
+bot.command('adjust', async (ctx) => {
+    try {
+        if (!ctx.from)
+            return;
+        // Check if user is authorized
+        if (!isAuthorized(ctx.from.id)) {
+            await ctx.reply('Not authorized.');
+            return;
+        }
+        const text = ctx.message?.text || '';
+        const parts = text.split(' ');
+        if (parts.length < 4) {
+            await ctx.reply('Usage: /adjust <@user_or_id> <+/-amount> <note...>');
+            return;
+        }
+        // Parse user ID (can be @username or numeric ID)
+        let userId;
+        const userPart = parts[1];
+        if (userPart.startsWith('@')) {
+            // @username - would need to resolve username to ID
+            await ctx.reply('Username resolution not implemented. Please use numeric user ID.');
+            return;
+        }
+        else {
+            userId = Number(userPart);
+            if (!Number.isFinite(userId) || userId <= 0) {
+                await ctx.reply('Invalid user ID. Please provide a valid numeric user ID.');
+                return;
+            }
+        }
+        // Parse amount
+        const amountStr = parts[2];
+        const deltaCents = Math.round(Number(amountStr) * 100);
+        if (!Number.isFinite(deltaCents)) {
+            await ctx.reply('Invalid amount. Please provide a valid number.');
+            return;
+        }
+        // Get note (everything after amount)
+        const note = parts.slice(3).join(' ');
+        // Get username for the target user (would need to be provided or looked up)
+        const username = `User_${userId}`; // Placeholder
+        try {
+            const newBalanceCents = await upsertLedger(userId, username, deltaCents, note);
+            const newBalance = (newBalanceCents / 100).toFixed(2);
+            await ctx.reply(`✅ Balance adjusted successfully.\nNew balance: $${newBalance}\nAdjustment: ${amountStr}\nNote: ${note}`);
+        }
+        catch (error) {
+            console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error adjusting ledger:`, error);
+            await ctx.reply('Error adjusting balance. Please try again.');
+        }
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Adjust command failed:`, error);
+        await ctx.reply('Sorry, something went wrong. Please try again.');
+    }
+});
+bot.command('balance', async (ctx) => {
+    try {
+        if (!ctx.from)
+            return;
+        const text = ctx.message?.text || '';
+        const parts = text.split(' ');
+        let targetUserId;
+        if (parts.length > 1) {
+            // Check if user is authorized to check other users' balances
+            if (!isAuthorized(ctx.from.id)) {
+                await ctx.reply('Not authorized to check other users\' balances.');
+                return;
+            }
+            const userPart = parts[1];
+            if (userPart.startsWith('@')) {
+                await ctx.reply('Username resolution not implemented. Please use numeric user ID.');
+                return;
+            }
+            else {
+                targetUserId = Number(userPart);
+                if (!Number.isFinite(targetUserId) || targetUserId <= 0) {
+                    await ctx.reply('Invalid user ID. Please provide a valid numeric user ID.');
+                    return;
+                }
+            }
+        }
+        else {
+            // Check own balance
+            targetUserId = ctx.from.id;
+        }
+        try {
+            const balanceCents = await getLedgerBalance(targetUserId);
+            const balance = (balanceCents / 100).toFixed(2);
+            const username = targetUserId === ctx.from.id ?
+                (ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name || 'You') :
+                `User_${targetUserId}`;
+            await ctx.reply(`${username}'s balance: $${balance}`);
+        }
+        catch (error) {
+            console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error getting balance:`, error);
+            await ctx.reply('Error retrieving balance. Please try again.');
+        }
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Balance command failed:`, error);
+        await ctx.reply('Sorry, something went wrong. Please try again.');
+    }
+});
 const app = express();
 app.use(express.json());
 app.get("/", (_req, res) => res.send("OK"));
