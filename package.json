@@ -6,7 +6,7 @@
   "engines": { "node": "20.x" },
   "scripts": {
     "dev": "ts-node src/index.ts",
-    "build": "npx tsc --skipLibCheck",
+    "build": "node ./node_modules/typescript/bin/tsc --skipLibCheck",
     "start": "node dist/index.js"
   },
   "dependencies": {
