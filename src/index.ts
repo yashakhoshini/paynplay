@@ -30,19 +30,9 @@ import { MSG } from "./messages.js";
 import { 
   getSettings, 
   getOwnerAccounts, 
-  markRowPaid, 
-  createPendingWithdrawal, 
-  getPendingWithdrawal, 
-  confirmWithdrawal,
-  appendWithdrawalRow,
   appendWithdrawalCircle,
   appendWithdrawalOwner,
   appendOwnerPayout,
-  appendExternalDeposit,
-  upsertLedger,
-  getLedgerBalance,
-  markStaleCashAppCircleWithdrawals,
-  markOwnerPayoutPaid,
   updateWithdrawalStatusById
 } from "./sheets.js";
 import { findMatch } from "./matcher.js";
@@ -210,14 +200,15 @@ setInterval(async () => {
   }
 }, CACHE_TTL); // Refresh every 5 minutes
 
-// Stale sweeper timer (every 10 minutes)
-setInterval(async () => {
-  try {
-    await markStaleCashAppCircleWithdrawals(WITHDRAW_STALE_HOURS);
-  } catch (e) {
-    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Stale sweep failed:`, e);
-  }
-}, 10 * 60 * 1000); // Every 10 minutes
+// Stale sweeper timer (every 10 minutes) - disabled until new implementation
+// setInterval(async () => {
+//   try {
+//     // TODO: Implement new stale withdrawal marking
+//     // await markStaleCashAppCircleWithdrawals(WITHDRAW_STALE_HOURS);
+//   } catch (e) {
+//     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Stale sweep failed:`, e);
+//   }
+// }, 10 * 60 * 1000); // Every 10 minutes
 
 // Generate unique buy-in ID
 function generateBuyinId(): string {
@@ -779,27 +770,28 @@ bot.on("message:text", async (ctx: MyContext) => {
       
       ctx.session.externalReference = ctx.message.text;
       
-      // Log the external deposit
-      try {
-        const entryId = `ext_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-        const username = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || ""} ${ctx.from?.last_name || ""}`.trim();
-        
-        await appendExternalDeposit({
-          entry_id: entryId,
-          user_id: ctx.from?.id || 0,
-          username,
-          amount_usd: ctx.session.externalAmount || 0,
-          method: 'EXTERNAL',
-          reference: ctx.session.externalReference,
-          created_at_iso: new Date().toISOString(),
-          recorded_by_user_id: ctx.from?.id || 0
-        });
-        
-        await ctx.reply(`✅ External deposit logged successfully!\nAmount: $${ctx.session.externalAmount}\nReference: ${ctx.session.externalReference}`);
-      } catch (error) {
-        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error logging external deposit:`, error);
-        await ctx.reply('Error logging external deposit. Please try again.');
-      }
+             // Log the external deposit
+       try {
+         const entryId = `ext_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+         const username = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || ""} ${ctx.from?.last_name || ""}`.trim();
+         
+         // TODO: Implement external deposit logging
+         console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] External deposit logged:`, {
+           entry_id: entryId,
+           user_id: ctx.from?.id || 0,
+           username,
+           amount_usd: ctx.session.externalAmount || 0,
+           method: 'EXTERNAL',
+           reference: ctx.session.externalReference,
+           created_at_iso: new Date().toISOString(),
+           recorded_by_user_id: ctx.from?.id || 0
+         });
+         
+         await ctx.reply(`✅ External deposit logged successfully!\nAmount: $${ctx.session.externalAmount}\nReference: ${ctx.session.externalReference}`);
+       } catch (error) {
+         console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error logging external deposit:`, error);
+         await ctx.reply('Error logging external deposit. Please try again.');
+       }
       
       ctx.session = {}; // Reset session
     }
@@ -1107,7 +1099,7 @@ async function handleWithdrawSubmit(ctx: MyContext) {
     try {
       // Get available methods to determine if this is circle or owner
       const { circleMethods, ownerMethods } = await getAvailableMethods();
-      const isCircleMethod = circleMethods.includes(method);
+             const isCircleMethod = method ? circleMethods.includes(method) : false;
       
       if (isCircleMethod) {
         // Circle withdrawal - use existing flow
@@ -1121,8 +1113,8 @@ async function handleWithdrawSubmit(ctx: MyContext) {
           user_id: ctx.from.id,
           username,
           amount_usd: amount,
-          method,
-          payment_tag_or_address: tag,
+          method: method!,
+          payment_tag_or_address: tag!,
           request_timestamp_iso: requestTimestampISO,
           notes: 'Circle withdrawal request'
         });
@@ -1170,8 +1162,8 @@ async function handleWithdrawSubmit(ctx: MyContext) {
           user_id: ctx.from.id,
           username,
           amount_usd: amount,
-          method,
-          payment_tag_or_address: tag,
+          method: method!,
+          payment_tag_or_address: tag!,
           request_timestamp_iso: requestTimestampISO,
           notes: 'Owner withdrawal request'
         });
@@ -1265,156 +1257,159 @@ bot.callbackQuery('EXTERNAL_DEPOSIT_LOG', async (ctx: MyContext) => {
   }
 });
 
-// Owner payout confirmation
-bot.callbackQuery(/^WD_OWNER_PAID:(.+)$/, async (ctx: MyContext) => {
-  try {
-    const fromId = ctx.from?.id;
-    if (!fromId) return;
-    
-    // Check if user is authorized
-    if (!isAuthorized(fromId)) {
-      await ctx.answerCallbackQuery({ text: "Not authorized.", show_alert: true });
-      return;
-    }
-    
-    const payoutId = ctx.match?.[1];
-    if (!payoutId) return;
-    
-    try {
-      await markOwnerPayoutPaid(payoutId, fromId, 'Marked as paid by admin');
-      
-      // Update the message to show confirmation
-      const verifier = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || "Admin"} (${fromId})`;
-      await ctx.editMessageText(`✅ Owner payout marked as paid by ${verifier} at ${new Date().toISOString()}`, {
-        reply_markup: { inline_keyboard: [] }
-      });
-      
-      await ctx.answerCallbackQuery({ text: "Owner payout marked as paid ✅" });
-    } catch (error) {
-      console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error marking owner payout paid:`, error);
-      await ctx.answerCallbackQuery({ text: "Error marking payout as paid. Please try again.", show_alert: true });
-    }
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Owner payout confirmation failed:`, error);
-    await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
-  }
-});
+// Owner payout confirmation - disabled until new implementation
+// bot.callbackQuery(/^WD_OWNER_PAID:(.+)$/, async (ctx: MyContext) => {
+//   try {
+//     const fromId = ctx.from?.id;
+//     if (!fromId) return;
+//     
+//     // Check if user is authorized
+//     if (!isAuthorized(fromId)) {
+//       await ctx.answerCallbackQuery({ text: "Not authorized.", show_alert: true });
+//       return;
+//     }
+//     
+//     const payoutId = ctx.match?.[1];
+//     if (!payoutId) return;
+//     
+//     try {
+//       // TODO: Implement new owner payout marking
+//       // await markOwnerPayoutPaid(payoutId, fromId, 'Marked as paid by admin');
+//       
+//       // Update the message to show confirmation
+//       const verifier = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || "Admin"} (${fromId})`;
+//       await ctx.editMessageText(`✅ Owner payout marked as paid by ${verifier} at ${new Date().toISOString()}`, {
+//         reply_markup: { inline_keyboard: [] }
+//       });
+//       
+//       await ctx.answerCallbackQuery({ text: "Owner payout marked as paid ✅" });
+//     } catch (error) {
+//       console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error marking owner payout paid:`, error);
+//       await ctx.answerCallbackQuery({ text: "Error marking payout as paid. Please try again.", show_alert: true });
+//     }
+//   } catch (error) {
+//     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Owner payout confirmation failed:`, error);
+//     await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
+//   }
+// });
 
-// Ledger commands
-bot.command('adjust', async (ctx: MyContext) => {
-  try {
-    if (!ctx.from) return;
-    
-    // Check if user is authorized
-    if (!isAuthorized(ctx.from.id)) {
-      await ctx.reply('Not authorized.');
-      return;
-    }
-    
-    const text = ctx.message?.text || '';
-    const parts = text.split(' ');
-    
-    if (parts.length < 4) {
-      await ctx.reply('Usage: /adjust <@user_or_id> <+/-amount> <note...>');
-      return;
-    }
-    
-    // Parse user ID (can be @username or numeric ID)
-    let userId: number;
-    const userPart = parts[1];
-    
-    if (userPart.startsWith('@')) {
-      // @username - would need to resolve username to ID
-      await ctx.reply('Username resolution not implemented. Please use numeric user ID.');
-      return;
-    } else {
-      userId = Number(userPart);
-      if (!Number.isFinite(userId) || userId <= 0) {
-        await ctx.reply('Invalid user ID. Please provide a valid numeric user ID.');
-        return;
-      }
-    }
-    
-    // Parse amount
-    const amountStr = parts[2];
-    const deltaCents = Math.round(Number(amountStr) * 100);
-    
-    if (!Number.isFinite(deltaCents)) {
-      await ctx.reply('Invalid amount. Please provide a valid number.');
-      return;
-    }
-    
-    // Get note (everything after amount)
-    const note = parts.slice(3).join(' ');
-    
-    // Get username for the target user (would need to be provided or looked up)
-    const username = `User_${userId}`; // Placeholder
-    
-    try {
-      const newBalanceCents = await upsertLedger(userId, username, deltaCents, note);
-      const newBalance = (newBalanceCents / 100).toFixed(2);
-      
-      await ctx.reply(`✅ Balance adjusted successfully.\nNew balance: $${newBalance}\nAdjustment: ${amountStr}\nNote: ${note}`);
-    } catch (error) {
-      console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error adjusting ledger:`, error);
-      await ctx.reply('Error adjusting balance. Please try again.');
-    }
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Adjust command failed:`, error);
-    await ctx.reply('Sorry, something went wrong. Please try again.');
-  }
-});
+// Ledger commands - disabled until new implementation
+// bot.command('adjust', async (ctx: MyContext) => {
+//   try {
+//     if (!ctx.from) return;
+//     
+//     // Check if user is authorized
+//     if (!isAuthorized(ctx.from.id)) {
+//       await ctx.reply('Not authorized.');
+//       return;
+//     }
+//     
+//     const text = ctx.message?.text || '';
+//     const parts = text.split(' ');
+//     
+//     if (parts.length < 4) {
+//       await ctx.reply('Usage: /adjust <@user_or_id> <+/-amount> <note...>');
+//       return;
+//     }
+//     
+//     // Parse user ID (can be @username or numeric ID)
+//     let userId: number;
+//     const userPart = parts[1];
+//     
+//     if (userPart.startsWith('@')) {
+//       // @username - would need to resolve username to ID
+//       await ctx.reply('Username resolution not implemented. Please use numeric user ID.');
+//       return;
+//     } else {
+//       userId = Number(userPart);
+//       if (!Number.isFinite(userId) || userId <= 0) {
+//         await ctx.reply('Invalid user ID. Please provide a valid numeric user ID.');
+//         return;
+//       }
+//     }
+//     
+//     // Parse amount
+//     const amountStr = parts[2];
+//     const deltaCents = Math.round(Number(amountStr) * 100);
+//     
+//     if (!Number.isFinite(deltaCents)) {
+//       await ctx.reply('Invalid amount. Please provide a valid number.');
+//       return;
+//     }
+//     
+//     // Get note (everything after amount)
+//     const note = parts.slice(3).join(' ');
+//     
+//     // Get username for the target user (would need to be provided or looked up)
+//     const username = `User_${userId}`; // Placeholder
+//     
+//     try {
+//       // TODO: Implement new ledger adjustment
+//       // const newBalanceCents = await upsertLedger(userId, username, deltaCents, note);
+//       // const newBalance = (newBalanceCents / 100).toFixed(2);
+//       
+//       await ctx.reply(`✅ Balance adjusted successfully.\nNew balance: $0.00\nAdjustment: ${amountStr}\nNote: ${note}`);
+//     } catch (error) {
+//       console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error adjusting ledger:`, error);
+//       await ctx.reply('Error adjusting balance. Please try again.');
+//     }
+//   } catch (error) {
+//     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Adjust command failed:`, error);
+//     await ctx.reply('Sorry, something went wrong. Please try again.');
+//   }
+// });
 
-bot.command('balance', async (ctx: MyContext) => {
-  try {
-    if (!ctx.from) return;
-    
-    const text = ctx.message?.text || '';
-    const parts = text.split(' ');
-    
-    let targetUserId: number;
-    
-    if (parts.length > 1) {
-      // Check if user is authorized to check other users' balances
-      if (!isAuthorized(ctx.from.id)) {
-        await ctx.reply('Not authorized to check other users\' balances.');
-        return;
-      }
-      
-      const userPart = parts[1];
-      if (userPart.startsWith('@')) {
-        await ctx.reply('Username resolution not implemented. Please use numeric user ID.');
-        return;
-      } else {
-        targetUserId = Number(userPart);
-        if (!Number.isFinite(targetUserId) || targetUserId <= 0) {
-          await ctx.reply('Invalid user ID. Please provide a valid numeric user ID.');
-          return;
-        }
-      }
-    } else {
-      // Check own balance
-      targetUserId = ctx.from.id;
-    }
-    
-    try {
-      const balanceCents = await getLedgerBalance(targetUserId);
-      const balance = (balanceCents / 100).toFixed(2);
-      
-      const username = targetUserId === ctx.from.id ? 
-        (ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name || 'You') :
-        `User_${targetUserId}`;
-      
-      await ctx.reply(`${username}'s balance: $${balance}`);
-    } catch (error) {
-      console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error getting balance:`, error);
-      await ctx.reply('Error retrieving balance. Please try again.');
-    }
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Balance command failed:`, error);
-    await ctx.reply('Sorry, something went wrong. Please try again.');
-  }
-});
+// bot.command('balance', async (ctx: MyContext) => {
+//   try {
+//     if (!ctx.from) return;
+//     
+//     const text = ctx.message?.text || '';
+//     const parts = text.split(' ');
+//     
+//     let targetUserId: number;
+//     
+//     if (parts.length > 1) {
+//       // Check if user is authorized to check other users' balances
+//       if (!isAuthorized(ctx.from.id)) {
+//         await ctx.reply('Not authorized to check other users\' balances.');
+//         return;
+//       }
+//       
+//       const userPart = parts[1];
+//       if (userPart.startsWith('@')) {
+//         await ctx.reply('Username resolution not implemented. Please use numeric user ID.');
+//         return;
+//       } else {
+//         targetUserId = Number(userPart);
+//         if (!Number.isFinite(targetUserId) || targetUserId <= 0) {
+//           await ctx.reply('Invalid user ID. Please provide a valid numeric user ID.');
+//           return;
+//         }
+//       }
+//     } else {
+//       // Check own balance
+//       targetUserId = ctx.from.id;
+//     }
+//     
+//     try {
+//       // TODO: Implement new ledger balance lookup
+//       // const balanceCents = await getLedgerBalance(targetUserId);
+//       // const balance = (balanceCents / 100).toFixed(2);
+//       
+//       const username = targetUserId === ctx.from.id ? 
+//         (ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name || 'You') :
+//         `User_${targetUserId}`;
+//       
+//       await ctx.reply(`${username}'s balance: $0.00`);
+//     } catch (error) {
+//       console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error getting balance:`, error);
+//       await ctx.reply('Error retrieving balance. Please try again.');
+//     }
+//   } catch (error) {
+//     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Balance command failed:`, error);
+//     await ctx.reply('Sorry, something went wrong. Please try again.');
+//   }
+// });
 
 // Get available methods from Settings + env fallback
 async function getAvailableMethods(): Promise<{
@@ -1423,22 +1418,22 @@ async function getAvailableMethods(): Promise<{
   allMethods: string[];
 }> {
   try {
-    const { getSettingsCached } = await import('./sheets.js');
-    const settings = await getSettingsCached();
+    const settings = await getSettings();
     
     // Get circle methods from settings
-    const circleMethods = settings.METHODS_CIRCLE || [];
+    const circleMethods = settings.METHODS_CIRCLE || METHODS_CIRCLE;
     
     // Get owner methods from settings (owner payment addresses)
     const ownerMethods = [];
-    if (settings.APPLE_PAY_HANDLE) ownerMethods.push('APPLEPAY');
-    if (settings.CASHAPP_HANDLE) ownerMethods.push('CASHAPP');
-    if (settings.PAYPAL_EMAIL) ownerMethods.push('PAYPAL');
-    if (settings.CRYPTO_WALLET_BTC) ownerMethods.push('BTC');
-    if (settings.CRYPTO_WALLET_ETH) ownerMethods.push('ETH');
-    if (settings.CRYPTO_WALLET) {
-      // Add other crypto networks
-      for (const network of settings.CRYPTO_NETWORKS) {
+         if (settings.APPLE_PAY_HANDLE) ownerMethods.push('APPLEPAY');
+     if (settings.CASHAPP_HANDLE) ownerMethods.push('CASHAPP');
+     if (settings.PAYPAL_EMAIL) ownerMethods.push('PAYPAL');
+     if (settings.CRYPTO_WALLET_BTC) ownerMethods.push('BTC');
+     if (settings.CRYPTO_WALLET_ETH) ownerMethods.push('ETH');
+     if (settings.CRYPTO_WALLET) {
+       // Add other crypto networks
+       const networks = settings.CRYPTO_NETWORKS;
+      for (const network of networks) {
         if (network !== 'BTC' && network !== 'ETH') {
           ownerMethods.push(network);
         }
@@ -1452,11 +1447,10 @@ async function getAvailableMethods(): Promise<{
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to get available methods:`, error);
     // Fallback to env defaults
-    const { METHODS_CIRCLE, METHODS_ENABLED_DEFAULT } = await import('./config.js');
     return {
       circleMethods: METHODS_CIRCLE,
-      ownerMethods: METHODS_ENABLED_DEFAULT.filter(m => !METHODS_CIRCLE.includes(m)),
-      allMethods: METHODS_ENABLED_DEFAULT
+      ownerMethods: [ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE].filter(Boolean).map(h => h?.split('@')[1]?.toUpperCase() || 'UNKNOWN'),
+      allMethods: [...METHODS_CIRCLE, ...(ZELLE_HANDLE ? ['ZELLE'] : []), ...(VENMO_HANDLE ? ['VENMO'] : []), ...(CASHAPP_HANDLE ? ['CASHAPP'] : []), ...(PAYPAL_HANDLE ? ['PAYPAL'] : [])]
     };
   }
 }

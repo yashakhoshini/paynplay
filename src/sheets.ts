@@ -22,7 +22,7 @@ import {
   CRYPTO_WALLET,
   CRYPTO_NETWORKS
 } from './config.js';
-import { OwnerAccount, UserRole } from './types.js';
+import { OwnerAccount, UserRole, Settings } from './types.js';
 
 type Sheets = sheets_v4.Sheets;
 
@@ -146,27 +146,7 @@ export async function validateSheetAccess(): Promise<boolean> {
   }
 }
 
-export type Settings = {
-  CLUB_NAME: string;
-  METHODS_ENABLED: string[];     // e.g. ['ZELLE','VENMO']
-  CURRENCY: string;              // e.g. 'USD'
-  FAST_FEE_PCT: number;          // e.g. 0.02
-  OWNER_FALLBACK_THRESHOLD: number;
-  OWNER_TG_USERNAME: string;
-  // Real-club ops settings
-  STRIPE_CHECKOUT_URL: string;
-  METHODS_CIRCLE: string[];
-  METHODS_EXTERNAL_LINK: string[];
-  WITHDRAW_STALE_HOURS: number;
-  // Owner payment method addresses
-  APPLE_PAY_HANDLE: string;
-  CASHAPP_HANDLE: string;
-  PAYPAL_EMAIL: string;
-  CRYPTO_WALLET_BTC: string;
-  CRYPTO_WALLET_ETH: string;
-  CRYPTO_WALLET: string;
-  CRYPTO_NETWORKS: string[];
-};
+
 
 // Cached settings getter
 export async function getSettingsCached(): Promise<Settings> {

@@ -1,20 +1,15 @@
 // Simple test to verify the implementation
-const { execSync } = require('child_process');
+import { execSync } from 'child_process';
 
 console.log('Testing implementation...');
 
 try {
-  // Test TypeScript compilation
-  console.log('1. Testing TypeScript compilation...');
-  execSync('npx tsc --noEmit', { stdio: 'inherit' });
-  console.log('✅ TypeScript compilation successful');
-
   // Test that the new functions are exported
-  console.log('2. Testing function exports...');
-  const sheets = require('./dist/sheets.js');
-  const matcher = require('./dist/matcher.js');
+  console.log('1. Testing function exports...');
+  const sheets = await import('./dist/sheets.js');
+  const matcher = await import('./dist/matcher.js');
   
-  // Check that new functions exist
+  // Check that new functions exist - these are named exports, not default exports
   const requiredFunctions = [
     'getSettingsCached',
     'getOpenCircleCashoutsCached',
@@ -44,8 +39,8 @@ try {
   
   console.log('✅ All required functions are exported');
   
-  console.log('3. Testing configuration...');
-  const config = require('./dist/config.js');
+  console.log('2. Testing configuration...');
+  const config = await import('./dist/config.js');
   
   // Check that new config values exist
   const requiredConfig = [

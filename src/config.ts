@@ -143,7 +143,6 @@ export const FIXED_WALLETS: Record<string,string> = (() => {
 
 // Owner payment method addresses for owner-paid rails
 export const APPLE_PAY_HANDLE = process.env.APPLE_PAY_HANDLE || '';
-export const CASHAPP_HANDLE = process.env.CASHAPP_HANDLE || '';
 export const PAYPAL_EMAIL = process.env.PAYPAL_EMAIL || '';
 export const CRYPTO_WALLET_BTC = process.env.CRYPTO_WALLET_BTC || '';
 export const CRYPTO_WALLET_ETH = process.env.CRYPTO_WALLET_ETH || '';
