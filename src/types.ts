@@ -64,7 +64,8 @@ export interface EnhancedMatchResult {
   type: 'CASHOUT' | 'OWNER';
   amount: number;
   method: string;
-  rowIndex?: number; // For CASHOUT matches
+  rowIndex?: number; // For CASHOUT matches (legacy)
+  request_id?: string; // For CASHOUT matches (new)
   receiver?: string; // For CASHOUT matches
   owner?: OwnerAccount; // For OWNER matches
 }
