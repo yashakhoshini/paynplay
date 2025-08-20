@@ -1,7 +1,7 @@
 import { Bot, session, InlineKeyboard } from "grammy";
 import express from "express";
 import { webhookCallback } from "grammy";
-import { BOT_TOKEN, BASE_URL, PORT, PRIVACY_HINTS_ENABLED, EFFECTIVE_ALLOWED_USER_IDS, MAX_BUYIN_AMOUNT, MIN_BUYIN_AMOUNT, SESSION_TIMEOUT_MS, MAX_MESSAGE_LENGTH, CLIENT_NAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE, METHODS_EXTERNAL_LINK, STRIPE_CHECKOUT_URL, WITHDRAW_STALE_HOURS, FIXED_WALLETS } from "./config.js";
+import { BOT_TOKEN, BASE_URL, PORT, PRIVACY_HINTS_ENABLED, EFFECTIVE_ALLOWED_USER_IDS, MAX_BUYIN_AMOUNT, MIN_BUYIN_AMOUNT, SESSION_TIMEOUT_MS, MAX_MESSAGE_LENGTH, CLIENT_NAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE, METHODS_EXTERNAL_LINK, STRIPE_CHECKOUT_URL, WITHDRAW_STALE_HOURS, FIXED_WALLETS, DEFAULT_METHODS, DEFAULT_CURRENCY, DEFAULT_FAST_FEE, OWNER_FALLBACK_THRESHOLD, OWNER_TG_USERNAME } from "./config.js";
 import { MSG } from "./messages.js";
 import { getSettings, getOwnerAccounts, markRowPaid, createPendingWithdrawal, getPendingWithdrawal, confirmWithdrawal, appendWithdrawalRow, appendOwnerPayout, appendExternalDeposit, upsertLedger, getLedgerBalance, markStaleCashAppCircleWithdrawals, markOwnerPayoutPaid } from "./sheets.js";
 import { findMatch } from "./matcher.js";
@@ -39,11 +39,11 @@ async function getCachedSettings() {
         // Use default settings when Google Sheets is not configured
         const defaultSettings = {
             CLUB_NAME: 'Club',
-            METHODS_ENABLED: ['ZELLE', 'VENMO', 'CASHAPP', 'PAYPAL'],
-            CURRENCY: 'USD',
-            FAST_FEE_PCT: 0.02,
-            OWNER_FALLBACK_THRESHOLD: 100,
-            OWNER_TG_USERNAME: ''
+            METHODS_ENABLED: DEFAULT_METHODS,
+            CURRENCY: DEFAULT_CURRENCY,
+            FAST_FEE_PCT: DEFAULT_FAST_FEE,
+            OWNER_FALLBACK_THRESHOLD: OWNER_FALLBACK_THRESHOLD,
+            OWNER_TG_USERNAME: OWNER_TG_USERNAME
         };
         sheetsCache.settings = defaultSettings;
         sheetsCache.lastUpdated = now;
@@ -278,11 +278,11 @@ bot.command("start", async (ctx) => {
             // Use default settings when Google Sheets is not configured
             settings = {
                 CLUB_NAME: 'Club',
-                METHODS_ENABLED: ['ZELLE', 'VENMO', 'CASHAPP', 'PAYPAL'],
-                CURRENCY: 'USD',
-                FAST_FEE_PCT: 0.02,
-                OWNER_FALLBACK_THRESHOLD: 100,
-                OWNER_TG_USERNAME: ''
+                METHODS_ENABLED: DEFAULT_METHODS,
+                CURRENCY: DEFAULT_CURRENCY,
+                FAST_FEE_PCT: DEFAULT_FAST_FEE,
+                OWNER_FALLBACK_THRESHOLD: OWNER_FALLBACK_THRESHOLD,
+                OWNER_TG_USERNAME: OWNER_TG_USERNAME
             };
         }
         const kb = new InlineKeyboard()
@@ -316,11 +316,11 @@ bot.callbackQuery("BUYIN", async (ctx) => {
             // Use default settings when Google Sheets is not configured
             settings = {
                 CLUB_NAME: 'Club',
-                METHODS_ENABLED: ['ZELLE', 'VENMO', 'CASHAPP', 'PAYPAL'],
-                CURRENCY: 'USD',
-                FAST_FEE_PCT: 0.02,
-                OWNER_FALLBACK_THRESHOLD: 100,
-                OWNER_TG_USERNAME: ''
+                METHODS_ENABLED: DEFAULT_METHODS,
+                CURRENCY: DEFAULT_CURRENCY,
+                FAST_FEE_PCT: DEFAULT_FAST_FEE,
+                OWNER_FALLBACK_THRESHOLD: OWNER_FALLBACK_THRESHOLD,
+                OWNER_TG_USERNAME: OWNER_TG_USERNAME
             };
             owners = [];
         }

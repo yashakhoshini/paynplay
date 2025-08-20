@@ -24,7 +24,12 @@ import {
   METHODS_EXTERNAL_LINK,
   STRIPE_CHECKOUT_URL,
   WITHDRAW_STALE_HOURS,
-  FIXED_WALLETS
+  FIXED_WALLETS,
+  DEFAULT_METHODS,
+  DEFAULT_CURRENCY,
+  DEFAULT_FAST_FEE,
+  OWNER_FALLBACK_THRESHOLD,
+  OWNER_TG_USERNAME
 } from "./config.js";
 import { MSG } from "./messages.js";
 import { 
@@ -110,11 +115,11 @@ async function getCachedSettings() {
     // Use default settings when Google Sheets is not configured
     const defaultSettings = {
       CLUB_NAME: 'Club',
-      METHODS_ENABLED: ['ZELLE', 'VENMO', 'CASHAPP', 'PAYPAL'],
-      CURRENCY: 'USD',
-      FAST_FEE_PCT: 0.02,
-      OWNER_FALLBACK_THRESHOLD: 100,
-      OWNER_TG_USERNAME: ''
+      METHODS_ENABLED: DEFAULT_METHODS,
+      CURRENCY: DEFAULT_CURRENCY,
+      FAST_FEE_PCT: DEFAULT_FAST_FEE,
+      OWNER_FALLBACK_THRESHOLD: OWNER_FALLBACK_THRESHOLD,
+      OWNER_TG_USERNAME: OWNER_TG_USERNAME
     };
     sheetsCache.settings = defaultSettings;
     sheetsCache.lastUpdated = now;
@@ -372,11 +377,11 @@ bot.command("start", async (ctx: MyContext) => {
       // Use default settings when Google Sheets is not configured
       settings = {
         CLUB_NAME: 'Club',
-        METHODS_ENABLED: ['ZELLE', 'VENMO', 'CASHAPP', 'PAYPAL'],
-        CURRENCY: 'USD',
-        FAST_FEE_PCT: 0.02,
-        OWNER_FALLBACK_THRESHOLD: 100,
-        OWNER_TG_USERNAME: ''
+        METHODS_ENABLED: DEFAULT_METHODS,
+        CURRENCY: DEFAULT_CURRENCY,
+        FAST_FEE_PCT: DEFAULT_FAST_FEE,
+        OWNER_FALLBACK_THRESHOLD: OWNER_FALLBACK_THRESHOLD,
+        OWNER_TG_USERNAME: OWNER_TG_USERNAME
       };
     }
     
@@ -413,11 +418,11 @@ bot.callbackQuery("BUYIN", async (ctx: MyContext) => {
       // Use default settings when Google Sheets is not configured
       settings = {
         CLUB_NAME: 'Club',
-        METHODS_ENABLED: ['ZELLE', 'VENMO', 'CASHAPP', 'PAYPAL'],
-        CURRENCY: 'USD',
-        FAST_FEE_PCT: 0.02,
-        OWNER_FALLBACK_THRESHOLD: 100,
-        OWNER_TG_USERNAME: ''
+        METHODS_ENABLED: DEFAULT_METHODS,
+        CURRENCY: DEFAULT_CURRENCY,
+        FAST_FEE_PCT: DEFAULT_FAST_FEE,
+        OWNER_FALLBACK_THRESHOLD: OWNER_FALLBACK_THRESHOLD,
+        OWNER_TG_USERNAME: OWNER_TG_USERNAME
       };
       owners = [];
     }

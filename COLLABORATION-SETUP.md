@@ -9,7 +9,7 @@
 
 ### 1. Clone the Repository
 ```bash
-git clone <repository-url>
+git clone https://github.com/yashakhoshini/paynplay.git
 cd paynplay
 ```
 
@@ -53,29 +53,47 @@ node test-bot.js
 node test-real-club-ops.js
 ```
 
-## Cursor Collaboration Features
+## Collaboration Methods
 
-### Real-time Collaboration
-**For Cursor 1.4.5:**
-1. **Try Command Palette:** `Ctrl+Shift+P` → search "live share" or "collaboration"
-2. **Install Live Share Extension:** `Ctrl+Shift+X` → search "Live Share" → install
-3. **Alternative:** Use Git-based workflow below
+**Since real-time collaboration isn't available in Cursor 1.4.5, use these methods:**
 
-**If collaboration features aren't available:**
-- Use Git branches and pull requests
-- Share code via GitHub
-- Use external tools like Discord/Slack for real-time communication
+### **1. Git-based Workflow (Recommended)**
+- Create feature branches for each task
+- Use pull requests for code review
+- Merge changes through GitHub
+- This is the industry standard approach
 
-### Git Workflow
+### **2. External Communication Tools**
+- **Discord/Slack:** For voice calls and screen sharing
+- **GitHub Issues:** For tracking bugs and features
+- **GitHub Discussions:** For team discussions
+- **Email:** For formal communication
+
+### **3. Code Review Process**
+- Use GitHub's PR interface for code reviews
+- Use Cursor's built-in diff viewer
+- Leverage AI code review features in Cursor
+
+## Git Workflow
+
+### **For Feature Development:**
 1. **Create feature branch:** `git checkout -b feature-name`
 2. **Make changes** and commit: `git commit -m "description"`
 3. **Push and create PR:** `git push origin feature-name`
 4. **Review and merge** through GitHub
 
-### Code Review Tips
-- Use Cursor's built-in diff viewer
-- Leverage AI code review features
-- Test changes locally before pushing
+### **For Bug Fixes:**
+1. **Create hotfix branch:** `git checkout -b hotfix/bug-description`
+2. **Fix the issue** and test locally
+3. **Commit and push:** `git push origin hotfix/bug-description`
+4. **Create PR** for review
+
+### **For Collaborative Development:**
+1. **Assign tasks** using GitHub Issues
+2. **Work on separate branches** for each task
+3. **Regular sync meetings** via Discord/Slack
+4. **Code review** through GitHub PRs
+5. **Merge to main** after approval
 
 ## Project Structure
 ```
@@ -111,6 +129,6 @@ src/
 - Environment variables managed in Railway dashboard
 
 ## Communication
-- Use Cursor's built-in chat during real-time sessions
+- Use Discord/Slack for real-time communication
 - Create issues in GitHub for bugs/features
 - Use PR comments for code review feedback
