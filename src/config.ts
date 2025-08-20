@@ -81,7 +81,7 @@ export const PORT      = Number(process.env.PORT || 8080);
 
 // Client-proof defaults (optional)
 export const OWNER_TG_USERNAME = process.env.OWNER_TG_USERNAME || ''; // e.g. yashakhoshini
-export const DEFAULT_METHODS = (process.env.METHODS_ENABLED_DEFAULT || 'ZELLE,VENMO,CASHAPP,PAYPAL')
+export const METHODS_ENABLED_DEFAULT = (process.env.METHODS_ENABLED_DEFAULT || 'ZELLE,VENMO,CASHAPP,PAYPAL,APPLEPAY')
   .split(',')
   .map(s => s.trim().toUpperCase())
   .filter(Boolean)
@@ -140,6 +140,26 @@ export const FIXED_WALLETS_JSON = process.env.FIXED_WALLETS_JSON || '{}';
 export const FIXED_WALLETS: Record<string,string> = (() => {
   try { return JSON.parse(FIXED_WALLETS_JSON); } catch { return {}; }
 })();
+
+// Owner payment method addresses for owner-paid rails
+export const APPLE_PAY_HANDLE = process.env.APPLE_PAY_HANDLE || '';
+export const PAYPAL_EMAIL = process.env.PAYPAL_EMAIL || '';
+export const CRYPTO_WALLET_BTC = process.env.CRYPTO_WALLET_BTC || '';
+export const CRYPTO_WALLET_ETH = process.env.CRYPTO_WALLET_ETH || '';
+export const CRYPTO_WALLET = process.env.CRYPTO_WALLET || '';
+export const CRYPTO_NETWORKS = (process.env.CRYPTO_NETWORKS || 'BTC,ETH')
+  .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+
+// Parse numeric IDs for owners and loaders
+export const OWNER_IDS_ARRAY: number[] = (process.env.OWNER_IDS || '')
+  .split(',')
+  .map(id => Number(id.trim()))
+  .filter(id => Number.isFinite(id) && id > 0);
+
+export const LOADER_IDS_ARRAY: number[] = (process.env.LOADER_IDS || '')
+  .split(',')
+  .map(id => Number(id.trim()))
+  .filter(id => Number.isFinite(id) && id > 0);
 
 // Enhanced authorization helper with dev bypass
 const rawAllowed = (process.env.ALLOWED_USER_IDS || process.env.ALLOWED_LOADERS || '')

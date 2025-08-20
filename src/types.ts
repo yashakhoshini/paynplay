@@ -7,6 +7,17 @@ export interface Settings {
   FAST_FEE_PCT: number;
   OWNER_FALLBACK_THRESHOLD: number;
   OWNER_TG_USERNAME?: string;
+  STRIPE_CHECKOUT_URL: string;
+  METHODS_CIRCLE: string[];
+  METHODS_EXTERNAL_LINK: string[];
+  WITHDRAW_STALE_HOURS: number;
+  APPLE_PAY_HANDLE: string;
+  CASHAPP_HANDLE: string;
+  PAYPAL_EMAIL: string;
+  CRYPTO_WALLET_BTC: string;
+  CRYPTO_WALLET_ETH: string;
+  CRYPTO_WALLET: string;
+  CRYPTO_NETWORKS: string[];
 }
 
 export interface OwnerAccount {
@@ -64,7 +75,8 @@ export interface EnhancedMatchResult {
   type: 'CASHOUT' | 'OWNER';
   amount: number;
   method: string;
-  rowIndex?: number; // For CASHOUT matches
+  rowIndex?: number; // For CASHOUT matches (legacy)
+  request_id?: string; // For CASHOUT matches (new)
   receiver?: string; // For CASHOUT matches
   owner?: OwnerAccount; // For OWNER matches
 }
