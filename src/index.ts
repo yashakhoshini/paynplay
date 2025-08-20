@@ -401,7 +401,6 @@ bot.command("start", async (ctx: MyContext) => {
 // Buy-in start
 bot.callbackQuery("BUYIN", async (ctx: MyContext) => {
   try {
-<<<<<<< HEAD
     let settings;
     let owners: any[] = [];
     
@@ -434,31 +433,21 @@ bot.callbackQuery("BUYIN", async (ctx: MyContext) => {
     for (const owner of owners) {
       availableMethods.add(owner.method);
     }
-=======
-    // Get available methods from Settings + env fallback
-    const { allMethods } = await getAvailableMethods();
->>>>>>> f6ae1220c6f1b6f4c175e7ede7bcd75cce11297b
     
     ctx.session.step = "METHOD";
     const kb = new InlineKeyboard();
     
+    // Convert Set to Array and sort for consistent ordering
+    const sortedMethods = Array.from(availableMethods).sort();
+    
     // Check if any methods are available
-    if (allMethods.length === 0) {
-      await ctx.editMessageText("No payment methods are currently available. Please contact the owner to set up payment methods.");
+    if (sortedMethods.length === 0) {
+      await ctx.editMessageText("No payment methods are currently available. Please contact the owner to set up payment methods or wait for pending withdrawals.");
       return;
     }
     
-    // Add methods to keyboard (2 per row for better layout)
-    for (let i = 0; i < allMethods.length; i += 2) {
-      const row = allMethods.slice(i, i + 2);
-      if (row.length === 1) {
-        kb.text(row[0], `METHOD_${row[0]}`);
-      } else {
-        kb.text(row[0], `METHOD_${row[0]}`).text(row[1], `METHOD_${row[1]}`);
-      }
-      if (i + 2 < allMethods.length) {
-        kb.row();
-      }
+    for (const m of sortedMethods) {
+      kb.text(m, `METHOD_${m}`).row();
     }
     
     await ctx.editMessageText(MSG.selectMethod, { reply_markup: kb });
