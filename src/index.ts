@@ -25,7 +25,7 @@ import {
   STRIPE_CHECKOUT_URL,
   WITHDRAW_STALE_HOURS,
   FIXED_WALLETS,
-  DEFAULT_METHODS,
+  METHODS_ENABLED_DEFAULT,
   DEFAULT_CURRENCY,
   DEFAULT_FAST_FEE,
   OWNER_FALLBACK_THRESHOLD,
@@ -108,7 +108,7 @@ async function getCachedSettings() {
     // Use default settings when Google Sheets is not configured
     const defaultSettings = {
       CLUB_NAME: 'Club',
-      METHODS_ENABLED: DEFAULT_METHODS,
+      METHODS_ENABLED: METHODS_ENABLED_DEFAULT,
       CURRENCY: DEFAULT_CURRENCY,
       FAST_FEE_PCT: DEFAULT_FAST_FEE,
       OWNER_FALLBACK_THRESHOLD: OWNER_FALLBACK_THRESHOLD,
@@ -371,7 +371,7 @@ bot.command("start", async (ctx: MyContext) => {
       // Use default settings when Google Sheets is not configured
       settings = {
         CLUB_NAME: 'Club',
-        METHODS_ENABLED: DEFAULT_METHODS,
+        METHODS_ENABLED: METHODS_ENABLED_DEFAULT,
         CURRENCY: DEFAULT_CURRENCY,
         FAST_FEE_PCT: DEFAULT_FAST_FEE,
         OWNER_FALLBACK_THRESHOLD: OWNER_FALLBACK_THRESHOLD,
@@ -412,7 +412,7 @@ bot.callbackQuery("BUYIN", async (ctx: MyContext) => {
       // Use default settings when Google Sheets is not configured
       settings = {
         CLUB_NAME: 'Club',
-        METHODS_ENABLED: DEFAULT_METHODS,
+        METHODS_ENABLED: METHODS_ENABLED_DEFAULT,
         CURRENCY: DEFAULT_CURRENCY,
         FAST_FEE_PCT: DEFAULT_FAST_FEE,
         OWNER_FALLBACK_THRESHOLD: OWNER_FALLBACK_THRESHOLD,
