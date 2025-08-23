@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
-import { SHEET_ID, METHODS_ENABLED_DEFAULT, DEFAULT_CURRENCY, DEFAULT_FAST_FEE, OWNER_FALLBACK_THRESHOLD, OWNER_TG_USERNAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE, GOOGLE_CLIENT_EMAIL, GOOGLE_PRIVATE_KEY, SHEETS_RATE_LIMIT_MS, CLIENT_NAME, METHODS_CIRCLE, METHODS_EXTERNAL_LINK, STRIPE_CHECKOUT_URL, WITHDRAW_STALE_HOURS, APPLE_PAY_HANDLE, PAYPAL_EMAIL, CRYPTO_WALLET_BTC, CRYPTO_WALLET_ETH, CRYPTO_WALLET, CRYPTO_NETWORKS } from './config.js';
+import { getClient } from './googleClient.js';
+import { SHEET_ID, METHODS_ENABLED_DEFAULT, DEFAULT_CURRENCY, DEFAULT_FAST_FEE, OWNER_FALLBACK_THRESHOLD, OWNER_TG_USERNAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE, SHEETS_RATE_LIMIT_MS, CLIENT_NAME, METHODS_CIRCLE, METHODS_EXTERNAL_LINK, STRIPE_CHECKOUT_URL, WITHDRAW_STALE_HOURS, APPLE_PAY_HANDLE, PAYPAL_EMAIL, CRYPTO_WALLET_BTC, CRYPTO_WALLET_ETH, CRYPTO_WALLET, CRYPTO_NETWORKS } from './config.js';
 // Singleton Google Sheets client
 let sheetsClient = null;
 let lastApiCall = 0;
@@ -15,6 +16,7 @@ async function rateLimitedApiCall(apiCall) {
     const timeSinceLastCall = now - lastApiCall;
     if (timeSinceLastCall < SHEETS_RATE_LIMIT_MS) {
         const delay = SHEETS_RATE_LIMIT_MS - timeSinceLastCall;
+        console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Rate limiting: waiting ${delay}ms`);
         await new Promise(resolve => setTimeout(resolve, delay));
     }
     lastApiCall = Date.now();
@@ -22,7 +24,7 @@ async function rateLimitedApiCall(apiCall) {
 }
 // Retry logic for failed API calls
 async function retryApiCall(apiCall, maxRetries = 3, baseDelay = 1000) {
-    let lastError;
+    let lastError = null;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
             return await rateLimitedApiCall(apiCall);
@@ -40,22 +42,12 @@ async function retryApiCall(apiCall, maxRetries = 3, baseDelay = 1000) {
     throw lastError;
 }
 // Singleton client creation
-async function getClient() {
+async function getSheetsClient() {
     if (sheetsClient) {
         return sheetsClient;
     }
-    if (!GOOGLE_CLIENT_EMAIL || !GOOGLE_PRIVATE_KEY) {
-        throw new Error('Google Sheets credentials not configured');
-    }
     try {
-        const auth = new google.auth.GoogleAuth({
-            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-            credentials: {
-                client_email: GOOGLE_CLIENT_EMAIL,
-                private_key: GOOGLE_PRIVATE_KEY
-            }
-        });
-        const authClient = await auth.getClient();
+        const authClient = await getClient();
         sheetsClient = google.sheets({ version: 'v4', auth: authClient });
         console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Google Sheets client initialized`);
         return sheetsClient;
@@ -77,7 +69,7 @@ export function invalidateCashoutsCache() {
 // Validate sheet permissions on startup
 export async function validateSheetAccess() {
     try {
-        const svc = await getClient();
+        const svc = await getSheetsClient();
         // Try to read the sheet metadata
         const meta = await retryApiCall(() => svc.spreadsheets.get({ spreadsheetId: SHEET_ID }));
         if (!meta.data.sheets || meta.data.sheets.length === 0) {
@@ -100,7 +92,7 @@ export async function getSettingsCached() {
         return settingsCache.data;
     }
     try {
-        const svc = await getClient();
+        const svc = await getSheetsClient();
         // Try read Settings!A1:B
         try {
             const res = await retryApiCall(() => svc.spreadsheets.values.get({
@@ -146,17 +138,16 @@ export async function getSettingsCached() {
                     CRYPTO_WALLET_BTC: map.get('CRYPTO_WALLET_BTC') || CRYPTO_WALLET_BTC,
                     CRYPTO_WALLET_ETH: map.get('CRYPTO_WALLET_ETH') || CRYPTO_WALLET_ETH,
                     CRYPTO_WALLET: map.get('CRYPTO_WALLET') || CRYPTO_WALLET,
-                    CRYPTO_NETWORKS: map.get('CRYPTO_NETWORKS') ?
-                        map.get('CRYPTO_NETWORKS').split(',').map(s => s.trim().toUpperCase()).filter(Boolean) :
-                        CRYPTO_NETWORKS
+                    CRYPTO_NETWORKS: (map.get('CRYPTO_NETWORKS') || CRYPTO_NETWORKS).split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
                 };
                 // Cache the result
                 settingsCache = { data: settings, timestamp: now };
+                console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Loaded settings from sheet`);
                 return settings;
             }
         }
         catch (error) {
-            console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] No Settings tab found, using fallback:`, error);
+            console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] No Settings tab found, using env defaults:`, error);
             // ignore (no Settings tab)
         }
         // Fallback: use env defaults
@@ -165,9 +156,8 @@ export async function getSettingsCached() {
             METHODS_ENABLED: METHODS_ENABLED_DEFAULT,
             CURRENCY: DEFAULT_CURRENCY,
             FAST_FEE_PCT: DEFAULT_FAST_FEE,
-            OWNER_FALLBACK_THRESHOLD,
-            OWNER_TG_USERNAME,
-            // Real-club ops settings
+            OWNER_FALLBACK_THRESHOLD: OWNER_FALLBACK_THRESHOLD,
+            OWNER_TG_USERNAME: OWNER_TG_USERNAME,
             STRIPE_CHECKOUT_URL: STRIPE_CHECKOUT_URL,
             METHODS_CIRCLE: METHODS_CIRCLE,
             METHODS_EXTERNAL_LINK: METHODS_EXTERNAL_LINK,
@@ -179,39 +169,15 @@ export async function getSettingsCached() {
             CRYPTO_WALLET_BTC: CRYPTO_WALLET_BTC,
             CRYPTO_WALLET_ETH: CRYPTO_WALLET_ETH,
             CRYPTO_WALLET: CRYPTO_WALLET,
-            CRYPTO_NETWORKS: CRYPTO_NETWORKS
+            CRYPTO_NETWORKS: CRYPTO_NETWORKS.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
         };
-        // Cache the result
+        // Cache the result even for fallback
         settingsCache = { data: settings, timestamp: now };
         return settings;
     }
     catch (error) {
         console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to get settings:`, error);
-        // Return safe defaults if everything fails
-        const settings = {
-            CLUB_NAME: 'Club',
-            METHODS_ENABLED: METHODS_ENABLED_DEFAULT,
-            CURRENCY: DEFAULT_CURRENCY,
-            FAST_FEE_PCT: DEFAULT_FAST_FEE,
-            OWNER_FALLBACK_THRESHOLD,
-            OWNER_TG_USERNAME,
-            // Real-club ops settings
-            STRIPE_CHECKOUT_URL: STRIPE_CHECKOUT_URL,
-            METHODS_CIRCLE: METHODS_CIRCLE,
-            METHODS_EXTERNAL_LINK: METHODS_EXTERNAL_LINK,
-            WITHDRAW_STALE_HOURS: WITHDRAW_STALE_HOURS,
-            // Owner payment method addresses
-            APPLE_PAY_HANDLE: APPLE_PAY_HANDLE,
-            CASHAPP_HANDLE: CASHAPP_HANDLE,
-            PAYPAL_EMAIL: PAYPAL_EMAIL,
-            CRYPTO_WALLET_BTC: CRYPTO_WALLET_BTC,
-            CRYPTO_WALLET_ETH: CRYPTO_WALLET_ETH,
-            CRYPTO_WALLET: CRYPTO_WALLET,
-            CRYPTO_NETWORKS: CRYPTO_NETWORKS
-        };
-        // Cache the result even for fallback
-        settingsCache = { data: settings, timestamp: now };
-        return settings;
+        throw error;
     }
 }
 // Legacy function for backward compatibility
@@ -220,7 +186,7 @@ export async function getSettings() {
 }
 export async function getOwnerAccounts() {
     try {
-        const svc = await getClient();
+        const svc = await getSheetsClient();
         // Try OwnerAccounts sheet if present
         try {
             const res = await retryApiCall(() => svc.spreadsheets.values.get({
@@ -258,7 +224,7 @@ export async function getOwnerAccounts() {
         if (VENMO_HANDLE)
             accounts.push({ method: 'VENMO', handle: VENMO_HANDLE, display_name: 'Venmo', instructions: 'Send to Venmo handle' });
         if (CASHAPP_HANDLE)
-            accounts.push({ method: 'CASHAPP', handle: CASHAPP_HANDLE, display_name: 'Cash App', instructions: 'Send to Cash App handle' });
+            accounts.push({ method: 'CASHAPP', handle: CASHAPP_HANDLE, display_name: 'CashApp', instructions: 'Send to CashApp handle' });
         if (PAYPAL_HANDLE)
             accounts.push({ method: 'PAYPAL', handle: PAYPAL_HANDLE, display_name: 'PayPal', instructions: 'Send to PayPal handle' });
         console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Using ${accounts.length} env owner accounts`);
@@ -277,7 +243,7 @@ export async function getOpenCircleCashoutsCached() {
         return openCashoutsCache.data;
     }
     try {
-        const svc = await getClient();
+        const svc = await getSheetsClient();
         const res = await retryApiCall(() => svc.spreadsheets.values.get({
             spreadsheetId: SHEET_ID,
             range: 'Withdrawals!A2:L'
@@ -325,7 +291,7 @@ export async function getOpenCashouts() {
 // New withdrawal functions
 export async function appendWithdrawalCircle(row) {
     try {
-        const svc = await getClient();
+        const svc = await getSheetsClient();
         // Ensure Withdrawals sheet exists with headers
         await ensureSheetHeaders('Withdrawals');
         const withdrawalRow = [
@@ -350,16 +316,16 @@ export async function appendWithdrawalCircle(row) {
         }));
         // Invalidate cache immediately
         invalidateCashoutsCache();
-        console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Appended circle withdrawal: ${row.request_id}`);
+        console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Added circle withdrawal: ${row.request_id}`);
     }
     catch (error) {
         console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to append circle withdrawal:`, error);
-        throw new Error('Unable to create withdrawal record. Please try again.');
+        throw error;
     }
 }
 export async function appendWithdrawalOwner(row) {
     try {
-        const svc = await getClient();
+        const svc = await getSheetsClient();
         // Ensure Withdrawals sheet exists with headers
         await ensureSheetHeaders('Withdrawals');
         const withdrawalRow = [
@@ -372,68 +338,78 @@ export async function appendWithdrawalOwner(row) {
             row.request_timestamp_iso,
             '', // approved_by_user_id (empty initially)
             '', // approved_at_iso (empty initially)
-            'LOGGED', // status
+            'LOGGED', // status (not QUEUED for owner withdrawals)
             'OWNER', // payout_type
             row.notes || ''
         ];
+        // Add to Withdrawals sheet
         await retryApiCall(() => svc.spreadsheets.values.append({
             spreadsheetId: SHEET_ID,
             range: 'Withdrawals!A:L',
             valueInputOption: 'USER_ENTERED',
             requestBody: { values: [withdrawalRow] }
         }));
-        // Also append to Owner Payouts sheet
-        await appendOwnerPayout({
-            payout_id: row.request_id,
-            user_id: row.user_id,
-            username: row.username,
-            amount_usd: row.amount_usd,
-            channel: row.method,
-            owner_wallet_or_handle: row.payment_tag_or_address,
-            request_timestamp_iso: row.request_timestamp_iso,
-            status: 'PENDING',
-            notes: row.notes
-        });
-        console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Appended owner withdrawal: ${row.request_id}`);
+        // Also add to Owner Payouts sheet for tracking
+        await ensureSheetHeaders('OwnerPayouts');
+        const ownerPayoutRow = [
+            row.request_id,
+            String(row.user_id),
+            row.username,
+            String(row.amount_usd),
+            row.method,
+            row.payment_tag_or_address,
+            row.request_timestamp_iso,
+            'PENDING', // status
+            row.notes || ''
+        ];
+        await retryApiCall(() => svc.spreadsheets.values.append({
+            spreadsheetId: SHEET_ID,
+            range: 'OwnerPayouts!A:I',
+            valueInputOption: 'USER_ENTERED',
+            requestBody: { values: [ownerPayoutRow] }
+        }));
+        console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Added owner withdrawal: ${row.request_id}`);
     }
     catch (error) {
         console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to append owner withdrawal:`, error);
-        throw new Error('Unable to create withdrawal record. Please try again.');
+        throw error;
     }
 }
-export async function updateWithdrawalStatusById(requestId, status, notes) {
+export async function updateWithdrawalStatusById(requestId, newStatus, approvedByUserId) {
     try {
-        const svc = await getClient();
-        // Find the withdrawal row
+        const svc = await getSheetsClient();
+        // Find the row with the request_id
         const res = await retryApiCall(() => svc.spreadsheets.values.get({
             spreadsheetId: SHEET_ID,
-            range: 'Withdrawals!A2:L'
+            range: 'Withdrawals!A:L'
         }));
         const rows = res.data.values || [];
-        let rowIndex = 2;
-        for (const row of rows) {
-            if (row[0] === requestId) {
-                // Update status (column J = index 9) and notes (column L = index 11)
-                const updates = [
-                    { range: `Withdrawals!J${rowIndex}`, value: status },
-                    { range: `Withdrawals!L${rowIndex}`, value: notes || '' }
-                ];
-                for (const update of updates) {
-                    await retryApiCall(() => svc.spreadsheets.values.update({
-                        spreadsheetId: SHEET_ID,
-                        range: update.range,
-                        valueInputOption: 'RAW',
-                        requestBody: { values: [[update.value]] }
-                    }));
-                }
-                // Invalidate cache immediately
-                invalidateCashoutsCache();
-                console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Updated withdrawal status: ${requestId} -> ${status}`);
-                return;
+        let rowIndex = -1;
+        for (let i = 0; i < rows.length; i++) {
+            if (rows[i][0] === requestId) {
+                rowIndex = i + 1; // Sheets is 1-indexed
+                break;
             }
-            rowIndex++;
         }
-        throw new Error(`Withdrawal ${requestId} not found`);
+        if (rowIndex === -1) {
+            throw new Error(`Withdrawal with request_id ${requestId} not found`);
+        }
+        // Update status and approval info
+        const updates = [
+            { range: `Withdrawals!I${rowIndex}`, values: [[newStatus]] },
+            { range: `Withdrawals!G${rowIndex}`, values: [[approvedByUserId || '']] },
+            { range: `Withdrawals!H${rowIndex}`, values: [[new Date().toISOString()]] }
+        ];
+        await retryApiCall(() => svc.spreadsheets.values.batchUpdate({
+            spreadsheetId: SHEET_ID,
+            requestBody: {
+                valueInputOption: 'USER_ENTERED',
+                data: updates
+            }
+        }));
+        // Invalidate cache
+        invalidateCashoutsCache();
+        console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Updated withdrawal ${requestId} to status: ${newStatus}`);
     }
     catch (error) {
         console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to update withdrawal status:`, error);
@@ -447,9 +423,9 @@ export async function updateWithdrawalStatus(requestId, status, notes) {
 // Owner payouts functions
 export async function appendOwnerPayout(row) {
     try {
-        const svc = await getClient();
+        const svc = await getSheetsClient();
         // Ensure Owner Payouts sheet exists with headers
-        await ensureSheetHeaders('Owner Payouts');
+        await ensureSheetHeaders('OwnerPayouts');
         const payoutRow = [
             row.payout_id,
             String(row.user_id),
@@ -464,7 +440,7 @@ export async function appendOwnerPayout(row) {
         ];
         await retryApiCall(() => svc.spreadsheets.values.append({
             spreadsheetId: SHEET_ID,
-            range: 'Owner Payouts!A:J',
+            range: 'OwnerPayouts!A:J',
             valueInputOption: 'USER_ENTERED',
             requestBody: { values: [payoutRow] }
         }));
@@ -478,55 +454,71 @@ export async function appendOwnerPayout(row) {
 // Helper function to ensure sheet headers exist
 async function ensureSheetHeaders(sheetName) {
     try {
-        const svc = await getClient();
+        const svc = await getSheetsClient();
         // Check if sheet exists
         const meta = await retryApiCall(() => svc.spreadsheets.get({ spreadsheetId: SHEET_ID }));
-        const sheetExists = meta.data.sheets?.some(s => s.properties?.title === sheetName);
+        const sheetExists = meta.data.sheets?.some((sheet) => sheet.properties?.title === sheetName);
         if (!sheetExists) {
-            // Create sheet
+            // Create the sheet
             await retryApiCall(() => svc.spreadsheets.batchUpdate({
                 spreadsheetId: SHEET_ID,
                 requestBody: {
                     requests: [{
                             addSheet: {
-                                properties: { title: sheetName }
+                                properties: {
+                                    title: sheetName
+                                }
                             }
                         }]
                 }
             }));
             console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Created sheet: ${sheetName}`);
         }
-        // Set headers based on sheet type
+        // Add headers based on sheet type
         let headers = [];
-        if (sheetName === 'Withdrawals') {
-            headers = [
-                'request_id', 'user_id', 'username', 'amount_usd', 'method',
-                'payment_tag_or_address', 'request_timestamp_iso', 'approved_by_user_id',
-                'approved_at_iso', 'status', 'payout_type', 'notes'
-            ];
-        }
-        else if (sheetName === 'Owner Payouts') {
-            headers = [
-                'payout_id', 'user_id', 'username', 'amount_usd', 'channel',
-                'owner_wallet_or_handle', 'request_timestamp_iso', 'paid_at_iso', 'status', 'notes'
-            ];
-        }
-        else if (sheetName === 'Settings') {
-            headers = ['key', 'value'];
+        switch (sheetName) {
+            case 'Withdrawals':
+                headers = [
+                    'request_id', 'user_id', 'username', 'amount_usd', 'method',
+                    'payment_tag_or_address', 'request_timestamp_iso', 'approved_by_user_id',
+                    'approved_at_iso', 'status', 'payout_type', 'notes'
+                ];
+                break;
+            case 'OwnerPayouts':
+                headers = [
+                    'request_id', 'user_id', 'username', 'amount_usd', 'method',
+                    'payment_tag_or_address', 'request_timestamp_iso', 'status', 'notes'
+                ];
+                break;
+            case 'Settings':
+                headers = ['key', 'value'];
+                break;
+            case 'OwnerAccounts':
+                headers = ['method', 'handle', 'display_name', 'instructions'];
+                break;
         }
         if (headers.length > 0) {
-            await retryApiCall(() => svc.spreadsheets.values.update({
+            // Check if headers already exist
+            const headerRes = await retryApiCall(() => svc.spreadsheets.values.get({
                 spreadsheetId: SHEET_ID,
-                range: `${sheetName}!A1:${String.fromCharCode(65 + headers.length - 1)}1`,
-                valueInputOption: 'RAW',
-                requestBody: { values: [headers] }
+                range: `${sheetName}!A1:${String.fromCharCode(65 + headers.length - 1)}1`
             }));
-            console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Set headers for ${sheetName}`);
+            const existingHeaders = headerRes.data.values?.[0] || [];
+            if (existingHeaders.length === 0) {
+                // Add headers
+                await retryApiCall(() => svc.spreadsheets.values.update({
+                    spreadsheetId: SHEET_ID,
+                    range: `${sheetName}!A1`,
+                    valueInputOption: 'USER_ENTERED',
+                    requestBody: { values: [headers] }
+                }));
+                console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Added headers to ${sheetName}`);
+            }
         }
     }
     catch (error) {
-        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to ensure sheet headers:`, error);
-        // Don't throw, this is not critical
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to ensure sheet headers for ${sheetName}:`, error);
+        throw error;
     }
 }
 // Legacy functions for backward compatibility
@@ -550,7 +542,7 @@ export async function markRowPaid(rowIndex, verifiedBy, verifiedAt, newStatus = 
 }
 export async function sortWithdrawalsByRequestTime() {
     try {
-        const svc = await getClient();
+        const svc = await getSheetsClient();
         // Get sheet metadata
         const meta = await retryApiCall(() => svc.spreadsheets.get({ spreadsheetId: SHEET_ID }));
         const sheet = meta.data.sheets?.find(s => s.properties?.title === 'Withdrawals');

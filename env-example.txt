@@ -1,43 +1,56 @@
-# Copy this to .env file and fill in your values
+# .env.example (do NOT put real secrets here)
+GOOGLE_CLIENT_EMAIL=your-service-account@your-project.iam.gserviceaccount.com
+# Preferred: base64-encoded PEM (single line). Provide either this OR GOOGLE_PRIVATE_KEY
+GOOGLE_PRIVATE_KEY_B64=
+# Optional fallback for local only (escaped \n). Avoid in CI.
+# GOOGLE_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n
 
-# Required Environment Variables
+# Bot Configuration
 BOT_TOKEN=your_telegram_bot_token_here
-SHEET_ID=your_google_sheet_id_here
-GOOGLE_CLIENT_EMAIL=your_service_account_email@project.iam.gserviceaccount.com
-GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYour private key here with \n escapes\n-----END PRIVATE KEY-----\n"
+CLIENT_NAME=Your Club Name
+CLIENT_ID=your_club_id
 
-# Optional Environment Variables (with defaults)
-BASE_URL=https://your-app.up.railway.app
-PORT=8080
-METHODS_ENABLED_DEFAULT=ZELLE,VENMO,CASHAPP,PAYPAL
-CURRENCY_DEFAULT=USD
-FAST_FEE_PCT_DEFAULT=0.02
-OWNER_FALLBACK_THRESHOLD=100
-OWNER_TG_USERNAME=your_telegram_username
+# Payment Methods
+METHODS_ENABLED_DEFAULT=VENMO,ZELLE,PAYPAL,CASHAPP,APPLE PAY,CRYPTO,CARD
+METHODS_CIRCLE=VENMO,ZELLE,CASHAPP
+METHODS_EXTERNAL_LINK=PAYPAL,APPLE PAY,CRYPTO,CARD
 
-# Owner handles (used if no OwnerAccounts sheet exists)
-ZELLE_HANDLE=your@email.com
-VENMO_HANDLE=@your_venmo_handle
-CASHAPP_HANDLE=$your_cashapp_handle
-PAYPAL_HANDLE=your@paypal_email.com
+# Club Settings
+MIN_BUYIN_AMOUNT=20
+MAX_BUYIN_AMOUNT=2000
+OWNER_FALLBACK_THRESHOLD=300
+WITHDRAW_STALE_HOURS=24
 
-# Group workflow settings
+# Owner Information
+OWNER_TG_USERNAME=your_username
 LOADER_GROUP_ID=-1001234567890
-ALLOWED_USER_IDS=123456789,987654321,111222333
+ALLOWED_USER_IDS=6043251197,5288492604
+
+# Google Sheets Configuration
+SHEET_ID=your_google_sheet_id_here
+SHEETS_RATE_LIMIT_MS=1000
+
+# Payment Handles
+ZELLE_HANDLE=your_zelle_handle
+VENMO_HANDLE=your_venmo_handle
+CASHAPP_HANDLE=your_cashapp_handle
+PAYPAL_HANDLE=your_paypal_handle
+APPLE_PAY_HANDLE=your_apple_pay_handle
+PAYPAL_EMAIL=your_paypal_email
+CRYPTO_WALLET_BTC=your_btc_wallet
+CRYPTO_WALLET_ETH=your_eth_wallet
+CRYPTO_WALLET=your_crypto_wallet
+CRYPTO_NETWORKS=BTC,ETH
+
+# External Services
+STRIPE_CHECKOUT_URL=your_stripe_checkout_url
+
+# Bot Configuration
+BASE_URL=your_base_url
+PORT=3000
 BOT_USERNAME=your_bot_username
 PRIVACY_HINTS_ENABLED=true
-
-# Security and amount limits
-MAX_BUYIN_AMOUNT=10000
-MIN_BUYIN_AMOUNT=20
-
-# Performance and rate limiting
-SHEETS_RATE_LIMIT_MS=1000
 SESSION_TIMEOUT_MS=300000
 MAX_MESSAGE_LENGTH=4096
-
-# Client identification (for multi-tenant deployments)
-CLIENT_NAME=your_club_name
-CLIENT_ID=your_club_id
 
 

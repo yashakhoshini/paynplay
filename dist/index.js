@@ -1,11 +1,7 @@
 import { Bot, session, InlineKeyboard } from "grammy";
 import express from "express";
 import { webhookCallback } from "grammy";
-<<<<<<< HEAD
-import { BOT_TOKEN, BASE_URL, PORT, PRIVACY_HINTS_ENABLED, EFFECTIVE_ALLOWED_USER_IDS, MAX_BUYIN_AMOUNT, MIN_BUYIN_AMOUNT, SESSION_TIMEOUT_MS, MAX_MESSAGE_LENGTH, CLIENT_NAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE, METHODS_EXTERNAL_LINK, STRIPE_CHECKOUT_URL, WITHDRAW_STALE_HOURS, FIXED_WALLETS, DEFAULT_METHODS, DEFAULT_CURRENCY, DEFAULT_FAST_FEE, OWNER_FALLBACK_THRESHOLD, OWNER_TG_USERNAME } from "./config.js";
-=======
-import { BOT_TOKEN, BASE_URL, PORT, PRIVACY_HINTS_ENABLED, EFFECTIVE_ALLOWED_USER_IDS, MAX_BUYIN_AMOUNT, MIN_BUYIN_AMOUNT, SESSION_TIMEOUT_MS, MAX_MESSAGE_LENGTH, CLIENT_NAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE, METHODS_CIRCLE, METHODS_EXTERNAL_LINK, STRIPE_CHECKOUT_URL, FIXED_WALLETS } from "./config.js";
->>>>>>> f6ae1220c6f1b6f4c175e7ede7bcd75cce11297b
+import { BOT_TOKEN, BASE_URL, PORT, PRIVACY_HINTS_ENABLED, EFFECTIVE_ALLOWED_USER_IDS, MAX_BUYIN_AMOUNT, MIN_BUYIN_AMOUNT, SESSION_TIMEOUT_MS, MAX_MESSAGE_LENGTH, CLIENT_NAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE, METHODS_CIRCLE, METHODS_EXTERNAL_LINK, STRIPE_CHECKOUT_URL, FIXED_WALLETS, METHODS_ENABLED_DEFAULT, DEFAULT_CURRENCY, DEFAULT_FAST_FEE, OWNER_FALLBACK_THRESHOLD, OWNER_TG_USERNAME } from "./config.js";
 import { MSG } from "./messages.js";
 import { getSettings, getOwnerAccounts, appendWithdrawalCircle, appendWithdrawalOwner, updateWithdrawalStatusById } from "./sheets.js";
 import { findMatch } from "./matcher.js";
@@ -43,7 +39,7 @@ async function getCachedSettings() {
         // Use default settings when Google Sheets is not configured
         const defaultSettings = {
             CLUB_NAME: 'Club',
-            METHODS_ENABLED: DEFAULT_METHODS,
+            METHODS_ENABLED: METHODS_ENABLED_DEFAULT,
             CURRENCY: DEFAULT_CURRENCY,
             FAST_FEE_PCT: DEFAULT_FAST_FEE,
             OWNER_FALLBACK_THRESHOLD: OWNER_FALLBACK_THRESHOLD,
@@ -282,7 +278,7 @@ bot.command("start", async (ctx) => {
             // Use default settings when Google Sheets is not configured
             settings = {
                 CLUB_NAME: 'Club',
-                METHODS_ENABLED: DEFAULT_METHODS,
+                METHODS_ENABLED: METHODS_ENABLED_DEFAULT,
                 CURRENCY: DEFAULT_CURRENCY,
                 FAST_FEE_PCT: DEFAULT_FAST_FEE,
                 OWNER_FALLBACK_THRESHOLD: OWNER_FALLBACK_THRESHOLD,
@@ -309,7 +305,6 @@ bot.command("start", async (ctx) => {
 // Buy-in start
 bot.callbackQuery("BUYIN", async (ctx) => {
     try {
-<<<<<<< HEAD
         let settings;
         let owners = [];
         try {
@@ -321,7 +316,7 @@ bot.callbackQuery("BUYIN", async (ctx) => {
             // Use default settings when Google Sheets is not configured
             settings = {
                 CLUB_NAME: 'Club',
-                METHODS_ENABLED: DEFAULT_METHODS,
+                METHODS_ENABLED: METHODS_ENABLED_DEFAULT,
                 CURRENCY: DEFAULT_CURRENCY,
                 FAST_FEE_PCT: DEFAULT_FAST_FEE,
                 OWNER_FALLBACK_THRESHOLD: OWNER_FALLBACK_THRESHOLD,
@@ -339,29 +334,17 @@ bot.callbackQuery("BUYIN", async (ctx) => {
         for (const owner of owners) {
             availableMethods.add(owner.method);
         }
-=======
-        // Get available methods from Settings + env fallback
-        const { allMethods } = await getAvailableMethods();
->>>>>>> f6ae1220c6f1b6f4c175e7ede7bcd75cce11297b
         ctx.session.step = "METHOD";
         const kb = new InlineKeyboard();
+        // Convert Set to Array and sort for consistent ordering
+        const sortedMethods = Array.from(availableMethods).sort();
         // Check if any methods are available
-        if (allMethods.length === 0) {
-            await ctx.editMessageText("No payment methods are currently available. Please contact the owner to set up payment methods.");
+        if (sortedMethods.length === 0) {
+            await ctx.editMessageText("No payment methods are currently available. Please contact the owner to set up payment methods or wait for pending withdrawals.");
             return;
         }
-        // Add methods to keyboard (2 per row for better layout)
-        for (let i = 0; i < allMethods.length; i += 2) {
-            const row = allMethods.slice(i, i + 2);
-            if (row.length === 1) {
-                kb.text(row[0], `METHOD_${row[0]}`);
-            }
-            else {
-                kb.text(row[0], `METHOD_${row[0]}`).text(row[1], `METHOD_${row[1]}`);
-            }
-            if (i + 2 < allMethods.length) {
-                kb.row();
-            }
+        for (const m of sortedMethods) {
+            kb.text(m, `METHOD_${m}`).row();
         }
         await ctx.editMessageText(MSG.selectMethod, { reply_markup: kb });
     }
