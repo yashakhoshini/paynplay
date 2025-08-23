@@ -1,126 +1,116 @@
 #!/bin/bash
 
-# Multi-Tenant Bot Deployment Script
-# Usage: ./deploy-club.sh <club-name> <bot-token> <sheet-id> <group-id> <allowed-ids>
+# ========================================
+# PAYNPLAY BOT - MULTI-CLUB DEPLOYMENT SCRIPT
+# ========================================
+# Usage: ./deploy-club.sh [club_name]
+# Example: ./deploy-club.sh poker_club
+# ========================================
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Check if Railway CLI is installed
-if ! command -v railway &> /dev/null; then
-    echo -e "${RED}Error: Railway CLI is not installed. Please install it first:${NC}"
-    echo "npm install -g @railway/cli"
-    echo "railway login"
-    exit 1
-fi
-
-# Check arguments
-if [ $# -lt 5 ]; then
-    echo -e "${RED}Usage: $0 <club-name> <bot-token> <sheet-id> <group-id> <allowed-ids>${NC}"
-    echo ""
-    echo "Arguments:"
-    echo "  club-name    - Name for the club (e.g., pokerclub)"
-    echo "  bot-token    - Telegram bot token from @BotFather"
-    echo "  sheet-id     - Google Sheet ID"
-    echo "  group-id     - Telegram group chat ID"
-    echo "  allowed-ids  - Comma-separated list of loader user IDs"
-    echo ""
-    echo "Example:"
-    echo "  $0 pokerclub 1234567890:ABCdefGHIjklMNOpqrsTUVwxyz 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms -1001234567890 123456789,987654321"
+# Check if club name is provided
+if [ -z "$1" ]; then
+    echo "❌ Error: Club name is required"
+    echo "Usage: ./deploy-club.sh [club_name]"
+    echo "Example: ./deploy-club.sh poker_club"
     exit 1
 fi
 
 CLUB_NAME=$1
-BOT_TOKEN=$2
-SHEET_ID=$3
-GROUP_ID=$4
-ALLOWED_IDS=$5
+ENV_FILE=".env.${CLUB_NAME}"
 
-echo -e "${BLUE}🚀 Deploying bot for club: ${CLUB_NAME}${NC}"
-echo ""
+echo "🚀 Deploying PaynPlay Bot for club: $CLUB_NAME"
 
-# Validate inputs
-echo -e "${YELLOW}Validating inputs...${NC}"
-
-if [[ ! $BOT_TOKEN =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
-    echo -e "${RED}Error: Invalid bot token format${NC}"
+# Check if club configuration exists
+if [ ! -f "$ENV_FILE" ]; then
+    echo "❌ Error: Club configuration file '$ENV_FILE' not found"
+    echo "Available club configurations:"
+    ls -la .env.* 2>/dev/null | grep -v ".env$" || echo "No club configurations found"
+    echo ""
+    echo "To create a new club configuration:"
+    echo "1. Copy .env.template to $ENV_FILE"
+    echo "2. Edit $ENV_FILE with club-specific values"
+    echo "3. Run this script again"
     exit 1
 fi
 
-if [[ ! $SHEET_ID =~ ^[A-Za-z0-9_-]+$ ]]; then
-    echo -e "${RED}Error: Invalid sheet ID format${NC}"
+echo "✅ Found club configuration: $ENV_FILE"
+
+# Backup current .env if it exists
+if [ -f ".env" ]; then
+    echo "📦 Backing up current .env to .env.backup"
+    cp .env .env.backup
+fi
+
+# Copy club configuration to .env
+echo "📋 Loading club configuration..."
+cp "$ENV_FILE" .env
+
+# Validate required environment variables
+echo "🔍 Validating configuration..."
+
+# Check for required variables
+REQUIRED_VARS=("BOT_TOKEN" "CLIENT_NAME" "SHEET_ID")
+MISSING_VARS=()
+
+for var in "${REQUIRED_VARS[@]}"; do
+    if ! grep -q "^${var}=" .env; then
+        MISSING_VARS+=("$var")
+    fi
+done
+
+if [ ${#MISSING_VARS[@]} -ne 0 ]; then
+    echo "❌ Error: Missing required environment variables:"
+    printf '  - %s\n' "${MISSING_VARS[@]}"
+    echo ""
+    echo "Please update $ENV_FILE with the missing values"
     exit 1
 fi
 
-if [[ ! $GROUP_ID =~ ^-?[0-9]+$ ]]; then
-    echo -e "${RED}Error: Invalid group ID format${NC}"
+echo "✅ Configuration validation passed"
+
+# Build the project
+echo "🔨 Building project..."
+npm run build
+
+# Check if build was successful
+if [ $? -ne 0 ]; then
+    echo "❌ Build failed. Please fix the errors and try again."
     exit 1
 fi
 
-echo -e "${GREEN}✓ Input validation passed${NC}"
+echo "✅ Build completed successfully"
+
+# Display deployment info
+echo ""
+echo "🎯 Deployment Summary:"
+echo "  Club Name: $CLUB_NAME"
+echo "  Config File: $ENV_FILE"
+echo "  Build Status: ✅ Success"
+echo ""
+echo "🚀 Ready to deploy!"
+echo ""
+echo "Next steps:"
+echo "1. Deploy to your hosting platform (Railway, Heroku, etc.)"
+echo "2. Set the environment variables from $ENV_FILE"
+echo "3. Start the bot"
+echo ""
+echo "To run locally: npm start"
+echo "To deploy to Railway: railway up"
 echo ""
 
-# Create Railway service
-echo -e "${YELLOW}Creating Railway service...${NC}"
-railway service create $CLUB_NAME
-echo -e "${GREEN}✓ Service created${NC}"
-echo ""
-
-# Set environment variables
-echo -e "${YELLOW}Setting environment variables...${NC}"
-
-# Required variables
-railway variables set BOT_TOKEN="$BOT_TOKEN"
-railway variables set SHEET_ID="$SHEET_ID"
-railway variables set LOADER_GROUP_ID="$GROUP_ID"
-railway variables set ALLOWED_USER_IDS="$ALLOWED_IDS"
-
-# Google service account (you'll need to set these manually)
-echo -e "${YELLOW}⚠️  You need to manually set these variables in Railway dashboard:${NC}"
-echo "  GOOGLE_CLIENT_EMAIL"
-echo "  GOOGLE_PRIVATE_KEY"
-echo ""
-
-# Optional variables with defaults
-railway variables set BASE_URL="https://$CLUB_NAME.up.railway.app"
-railway variables set PORT="8080"
-railway variables set METHODS_ENABLED_DEFAULT="ZELLE,VENMO,CASHAPP,PAYPAL"
-railway variables set CURRENCY_DEFAULT="USD"
-railway variables set FAST_FEE_PCT_DEFAULT="0.02"
-railway variables set OWNER_FALLBACK_THRESHOLD="100"
-railway variables set PRIVACY_HINTS_ENABLED="true"
-
-echo -e "${GREEN}✓ Environment variables set${NC}"
-echo ""
-
-# Deploy
-echo -e "${YELLOW}Deploying service...${NC}"
-railway up
-echo -e "${GREEN}✓ Deployment completed${NC}"
-echo ""
-
-# Get service URL
-SERVICE_URL=$(railway status --json | jq -r '.url // empty')
-if [ -n "$SERVICE_URL" ]; then
-    echo -e "${GREEN}🎉 Bot deployed successfully!${NC}"
-    echo ""
-    echo -e "${BLUE}Service URL:${NC} $SERVICE_URL"
-    echo -e "${BLUE}Webhook URL:${NC} $SERVICE_URL/$BOT_TOKEN"
-    echo ""
-    echo -e "${YELLOW}Next steps:${NC}"
-    echo "1. Set GOOGLE_CLIENT_EMAIL and GOOGLE_PRIVATE_KEY in Railway dashboard"
-    echo "2. Test the bot: /ping"
-    echo "3. Verify webhook: https://api.telegram.org/bot$BOT_TOKEN/getWebhookInfo"
-    echo "4. Test buy-in flow"
-    echo ""
-    echo -e "${GREEN}Bot is ready for $CLUB_NAME! 🎰${NC}"
+# Optional: Ask if user wants to deploy now
+read -p "Do you want to deploy now? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo "🚀 Starting deployment..."
+    # Add your deployment command here
+    # Example: railway up
+    echo "Deployment command would run here"
 else
-    echo -e "${RED}Error: Could not get service URL${NC}"
-    echo "Check Railway dashboard for the service URL"
+    echo "📋 Deployment ready. Run manually when ready."
 fi
+
+echo ""
+echo "✅ Club '$CLUB_NAME' deployment setup complete!"
