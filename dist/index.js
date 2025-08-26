@@ -163,7 +163,7 @@ function isAuthorized(userId) {
         console.warn(`[${new Date().toISOString()}] [${CLIENT_NAME}] No authorized users configured`);
         return false;
     }
-    const isAllowed = EFFECTIVE_ALLOWED_USER_IDS.includes(userId);
+    const isAllowed = EFFECTIVE_ALLOWED_USER_IDS.includes(String(userId));
     if (!isAllowed) {
         console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Denied access: user ${userId} not in allowed list ${EFFECTIVE_ALLOWED_USER_IDS.join(',')}`);
     }

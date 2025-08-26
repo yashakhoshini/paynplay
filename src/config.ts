@@ -184,4 +184,16 @@ export const CONFIG_VALIDATION = { errors, warnings };
 
 // Legacy exports for backward compatibility
 export const EFFECTIVE_ALLOWED_USER_IDS = ALLOWED_USER_IDS;
-export const FIXED_WALLETS = {};
+export const FIXED_WALLETS: { [key: string]: string } = {
+  VENMO: VENMO_HANDLE,
+  ZELLE: ZELLE_HANDLE,
+  CASHAPP: CASHAPP_HANDLE,
+  PAYPAL: PAYPAL_HANDLE,
+  BTC: CRYPTO_WALLET_BTC,
+  ETH: CRYPTO_WALLET_ETH,
+  LTC: CRYPTO_WALLET,
+  USDT_ERC20: CRYPTO_WALLET,
+  USDT_TRC20: CRYPTO_WALLET,
+  XRP: CRYPTO_WALLET,
+  SOL: CRYPTO_WALLET
+};
