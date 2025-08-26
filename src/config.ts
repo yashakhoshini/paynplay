@@ -7,7 +7,11 @@ function decodePrivateKey(): string {
   if (b64) {
     try {
       const decoded = Buffer.from(b64, 'base64').toString('utf8').trim();
-      return decoded;
+      // Convert literal \n to actual newlines
+      return decoded
+        .replace(/\\r\\n/g, '\n')
+        .replace(/\\n/g, '\n')
+        .replace(/\r\n/g, '\n');
     } catch (e) {
       throw new Error('GOOGLE_PRIVATE_KEY_B64 could not be base64-decoded.');
     }
