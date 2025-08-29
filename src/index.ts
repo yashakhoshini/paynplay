@@ -38,7 +38,10 @@ import {
   appendWithdrawalCircle,
   appendWithdrawalOwner,
   appendOwnerPayout,
-  updateWithdrawalStatusById
+  updateWithdrawalStatusById,
+  appendExternalDeposit,
+  markOwnerPayoutPaid,
+  markStaleCashAppCircleWithdrawals
 } from "./sheets.js";
 import { findMatch } from "./matcher.js";
 import { Transaction, GroupSession } from "./types.js";
@@ -205,15 +208,14 @@ setInterval(async () => {
   }
 }, CACHE_TTL); // Refresh every 5 minutes
 
-// Stale sweeper timer (every 10 minutes) - disabled until new implementation
-// setInterval(async () => {
-//   try {
-//     // TODO: Implement new stale withdrawal marking
-//     // await markStaleCashAppCircleWithdrawals(WITHDRAW_STALE_HOURS);
-//   } catch (e) {
-//     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Stale sweep failed:`, e);
-//   }
-// }, 10 * 60 * 1000); // Every 10 minutes
+// Stale sweeper timer (every 10 minutes)
+setInterval(async () => {
+  try {
+    await markStaleCashAppCircleWithdrawals(WITHDRAW_STALE_HOURS);
+  } catch (e) {
+    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Stale sweep failed:`, e);
+  }
+}, 10 * 60 * 1000); // Every 10 minutes
 
 // Generate unique buy-in ID
 function generateBuyinId(): string {
@@ -383,11 +385,6 @@ bot.command("start", async (ctx: MyContext) => {
       .text("💵 Buy-In", "BUYIN")
       .row()
       .text("💸 Withdraw", "WITHDRAW");
-
-    if (settings.STRIPE_CHECKOUT_URL) {
-      kb.row().url('🔗 Pay via Link', settings.STRIPE_CHECKOUT_URL)
-        .row().text('🧾 Log External Deposit', 'EXTERNAL_DEPOSIT_LOG');
-    }
     
     await ctx.reply(truncateMessage(MSG.welcome(settings.CLUB_NAME ?? "our club")), {
       reply_markup: kb,
@@ -480,10 +477,10 @@ bot.callbackQuery(/METHOD_(.+)/, async (ctx: MyContext) => {
     // Check if this is an external link method
     if (settings.METHODS_EXTERNAL_LINK.includes(upper) && settings.STRIPE_CHECKOUT_URL) {
       const kb = new InlineKeyboard()
-        .url('Open Checkout', settings.STRIPE_CHECKOUT_URL)
+        .url('🔗 Pay via Stripe', settings.STRIPE_CHECKOUT_URL)
         .row()
-        .text('🧾 Log External Deposit', 'EXTERNAL_DEPOSIT_LOG');
-      await ctx.editMessageText('Use the link to pay. You can optionally log your payment for records:', { reply_markup: kb });
+        .text('🧾 Log Payment After Stripe', 'EXTERNAL_DEPOSIT_LOG');
+      await ctx.editMessageText(`Click the link to pay via ${method}. After payment, click the button below to log it for records:`, { reply_markup: kb });
       return;
     }
     
@@ -799,13 +796,12 @@ bot.on("message:text", async (ctx: MyContext) => {
       
       ctx.session.externalReference = ctx.message.text;
       
-             // Log the external deposit
+             // Log the external deposit to Google Sheets
        try {
          const entryId = `ext_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
          const username = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || ""} ${ctx.from?.last_name || ""}`.trim();
          
-         // TODO: Implement external deposit logging
-         console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] External deposit logged:`, {
+         await appendExternalDeposit({
            entry_id: entryId,
            user_id: ctx.from?.id || 0,
            username,
@@ -816,7 +812,7 @@ bot.on("message:text", async (ctx: MyContext) => {
            recorded_by_user_id: ctx.from?.id || 0
          });
          
-         await ctx.reply(`✅ External deposit logged successfully!\nAmount: $${ctx.session.externalAmount}\nReference: ${ctx.session.externalReference}`);
+         await ctx.reply(`✅ Stripe payment logged successfully!\nAmount: $${ctx.session.externalAmount}\nReference: ${ctx.session.externalReference}\n\nYour payment has been recorded in our system.`);
        } catch (error) {
          console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error logging external deposit:`, error);
          await ctx.reply('Error logging external deposit. Please try again.');
@@ -957,16 +953,18 @@ bot.callbackQuery(/^MARKPAID:(.+?):(.+)$/, async (ctx: MyContext) => {
     const buyinId = ctx.match?.[1];
     const requestId = ctx.match?.[2]; // Empty string means owner route (no cashout row to mark)
 
-    // Update Google Sheet if a cashout row exists
+    // Update Google Sheet if a cashout row exists (non-blocking)
     const iso = new Date().toISOString();
     if (requestId && requestId.trim() !== '') {
-      try {
-        await updateWithdrawalStatusById(requestId, 'PAID', `Marked as paid by ${ctx.from?.username ? '@' + ctx.from.username : ctx.from?.first_name || 'Loader'} (${fromId})`);
-        // Cache is automatically invalidated by updateWithdrawalStatusById
-      } catch (e) {
-        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] updateWithdrawalStatusById failed:`, e);
-        // Still proceed to update UI to avoid multiple clicks; loaders can fix sheet later
-      }
+      // Update UI immediately, then update sheet in background
+      updateWithdrawalStatusById(requestId, 'PAID', `Marked as paid by ${ctx.from?.username ? '@' + ctx.from.username : ctx.from?.first_name || 'Loader'} (${fromId})`)
+        .then(() => {
+          console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Sheet updated successfully for ${requestId}`);
+        })
+        .catch((e) => {
+          console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] updateWithdrawalStatusById failed:`, e);
+          // Sheet update failed, but UI is already updated
+        });
     }
 
     // Edit the group card message to show confirmation and remove the button
@@ -1279,7 +1277,7 @@ function generateWithdrawId(): string {
 bot.callbackQuery('EXTERNAL_DEPOSIT_LOG', async (ctx: MyContext) => {
   try {
     ctx.session.step = "EXTERNAL_AMOUNT";
-    await ctx.editMessageText('Please enter the amount you paid:');
+    await ctx.editMessageText('Please enter the amount you paid via Stripe:');
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] External deposit log setup failed:`, error);
     await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });

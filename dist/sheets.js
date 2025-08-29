@@ -490,6 +490,17 @@ async function ensureSheetHeaders(sheetName) {
                     'payment_tag_or_address', 'request_timestamp_iso', 'status', 'notes'
                 ];
                 break;
+            case 'ExternalDeposits':
+                headers = [
+                    'entry_id', 'user_id', 'username', 'amount_usd', 'method',
+                    'reference', 'created_at_iso', 'recorded_by_user_id'
+                ];
+                break;
+            case 'PlayerLedger':
+                headers = [
+                    'user_id', 'username', 'delta_cents', 'timestamp', 'note'
+                ];
+                break;
             case 'Settings':
                 headers = ['key', 'value'];
                 break;
@@ -567,3 +578,169 @@ export async function sortWithdrawalsByRequestTime() {
         // Don't throw, this is not critical
     }
 }
+// External deposit logging
+export async function appendExternalDeposit(row) {
+    try {
+        const svc = await getSheetsClient();
+        // Ensure ExternalDeposits sheet exists with headers
+        await ensureSheetHeaders('ExternalDeposits');
+        const depositRow = [
+            row.entry_id,
+            String(row.user_id),
+            row.username,
+            String(row.amount_usd),
+            row.method,
+            row.reference,
+            row.created_at_iso,
+            String(row.recorded_by_user_id)
+        ];
+        await retryApiCall(() => svc.spreadsheets.values.append({
+            spreadsheetId: SHEET_ID,
+            range: 'ExternalDeposits!A:H',
+            valueInputOption: 'USER_ENTERED',
+            requestBody: { values: [depositRow] }
+        }));
+        console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Added external deposit: ${row.entry_id}`);
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to append external deposit:`, error);
+        throw error;
+    }
+}
+// Owner payout marking as paid
+export async function markOwnerPayoutPaid(payoutId, markedByUserId, note) {
+    try {
+        const svc = await getSheetsClient();
+        // Find the payout in OwnerPayouts sheet
+        const res = await retryApiCall(() => svc.spreadsheets.values.get({
+            spreadsheetId: SHEET_ID,
+            range: 'OwnerPayouts!A:I'
+        }));
+        const rows = res.data.values || [];
+        let rowIndex = -1;
+        for (let i = 1; i < rows.length; i++) {
+            if (rows[i][0] === payoutId) {
+                rowIndex = i + 1; // Convert to 1-based index
+                break;
+            }
+        }
+        if (rowIndex === -1) {
+            throw new Error(`Owner payout ${payoutId} not found`);
+        }
+        // Update status to PAID
+        await retryApiCall(() => svc.spreadsheets.values.update({
+            spreadsheetId: SHEET_ID,
+            range: `OwnerPayouts!H${rowIndex}`,
+            valueInputOption: 'USER_ENTERED',
+            requestBody: { values: [['PAID']] }
+        }));
+        // Update notes
+        await retryApiCall(() => svc.spreadsheets.values.update({
+            spreadsheetId: SHEET_ID,
+            range: `OwnerPayouts!I${rowIndex}`,
+            valueInputOption: 'USER_ENTERED',
+            requestBody: { values: [[note]] }
+        }));
+        console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Marked owner payout as paid: ${payoutId}`);
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to mark owner payout paid:`, error);
+        throw error;
+    }
+}
+// Ledger functions
+export async function upsertLedger(userId, username, deltaCents, note) {
+    try {
+        const svc = await getSheetsClient();
+        // Ensure PlayerLedger sheet exists with headers
+        await ensureSheetHeaders('PlayerLedger');
+        const timestamp = new Date().toISOString();
+        const ledgerRow = [
+            String(userId),
+            username,
+            String(deltaCents),
+            timestamp,
+            note
+        ];
+        await retryApiCall(() => svc.spreadsheets.values.append({
+            spreadsheetId: SHEET_ID,
+            range: 'PlayerLedger!A:E',
+            valueInputOption: 'USER_ENTERED',
+            requestBody: { values: [ledgerRow] }
+        }));
+        // Calculate new balance
+        const balance = await getLedgerBalance(userId);
+        console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Updated ledger for user ${userId}: ${deltaCents} cents, new balance: ${balance} cents`);
+        return balance;
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to upsert ledger:`, error);
+        throw error;
+    }
+}
+export async function getLedgerBalance(userId) {
+    try {
+        const svc = await getSheetsClient();
+        // Get all ledger entries for this user
+        const res = await retryApiCall(() => svc.spreadsheets.values.get({
+            spreadsheetId: SHEET_ID,
+            range: 'PlayerLedger!A:C'
+        }));
+        const rows = res.data.values || [];
+        let balance = 0;
+        for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (row[0] === String(userId)) {
+                balance += Number(row[2]) || 0;
+            }
+        }
+        return balance;
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to get ledger balance:`, error);
+        return 0; // Return 0 if sheet access fails
+    }
+}
+// Stale withdrawal marking
+export async function markStaleCashAppCircleWithdrawals(staleHours) {
+    try {
+        const svc = await getSheetsClient();
+        const res = await retryApiCall(() => svc.spreadsheets.values.get({
+            spreadsheetId: SHEET_ID,
+            range: 'Withdrawals!A:L'
+        }));
+        const rows = res.data.values || [];
+        const now = new Date();
+        const staleThreshold = new Date(now.getTime() - (staleHours * 60 * 60 * 1000));
+        for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            const method = row[4]; // method column
+            const status = row[9]; // status column
+            const requestTime = row[6]; // request_timestamp_iso column
+            const payoutType = row[10]; // payout_type column
+            // Only mark CASHAPP circle withdrawals as stale
+            if (method === 'CASHAPP' && status === 'QUEUED' && payoutType === 'CIRCLE') {
+                try {
+                    const requestDate = new Date(requestTime);
+                    if (requestDate < staleThreshold) {
+                        // Mark as stale
+                        await retryApiCall(() => svc.spreadsheets.values.update({
+                            spreadsheetId: SHEET_ID,
+                            range: `Withdrawals!J${i + 1}`,
+                            valueInputOption: 'USER_ENTERED',
+                            requestBody: { values: [['STALE']] }
+                        }));
+                        console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Marked stale withdrawal: ${row[0]}`);
+                    }
+                }
+                catch (error) {
+                    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to mark withdrawal stale:`, error);
+                }
+            }
+        }
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Failed to mark stale withdrawals:`, error);
+    }
+}
+// Legacy functions for backward compatibility
