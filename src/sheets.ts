@@ -461,13 +461,14 @@ export async function appendWithdrawalOwner(row: {
       row.method,
       row.payment_tag_or_address,
       row.request_timestamp_iso,
+      '',        // paid_at_iso initially empty
       'PENDING', // status
       row.notes || ''
     ];
 
     await retryApiCall(() => svc.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: 'OwnerPayouts!A:I',
+      range: 'OwnerPayouts!A:J',
       valueInputOption: 'USER_ENTERED',
       requestBody: { values: [ownerPayoutRow] }
     }));
@@ -504,10 +505,11 @@ export async function updateWithdrawalStatusById(requestId: string, newStatus: s
     }
     
     // Update status and approval info
+    // Correct column order: H = approved_by_user_id, I = approved_at_iso, J = status
     const updates = [
-      { range: `Withdrawals!I${rowIndex}`, values: [[newStatus]] },
-      { range: `Withdrawals!G${rowIndex}`, values: [[approvedByUserId || '']] },
-      { range: `Withdrawals!H${rowIndex}`, values: [[new Date().toISOString()]] }
+      { range: `Withdrawals!H${rowIndex}`, values: [[approvedByUserId || '']] },
+      { range: `Withdrawals!I${rowIndex}`, values: [[new Date().toISOString()]] },
+      { range: `Withdrawals!J${rowIndex}`, values: [[newStatus]] }
     ];
     
     await retryApiCall(() => svc.spreadsheets.values.batchUpdate({
@@ -616,9 +618,18 @@ async function ensureSheetHeaders(sheetName: string): Promise<void> {
         ];
         break;
       case 'OwnerPayouts':
+        // Standardize OwnerPayouts headers to include paid_at_iso and status
         headers = [
-          'request_id', 'user_id', 'username', 'amount_usd', 'method', 
-          'payment_tag_or_address', 'request_timestamp_iso', 'status', 'notes'
+          'request_id',
+          'user_id',
+          'username',
+          'amount_usd',
+          'method',
+          'payment_tag_or_address',
+          'request_timestamp_iso',
+          'paid_at_iso',
+          'status',
+          'notes'
         ];
         break;
       case 'ExternalDeposits':
@@ -783,18 +794,22 @@ export async function markOwnerPayoutPaid(payoutId: string, markedByUserId: numb
       throw new Error(`Owner payout ${payoutId} not found`);
     }
     
-    // Update status to PAID
+    // Columns: H = paid_at_iso, I = status, J = notes
     await retryApiCall(() => svc.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
       range: `OwnerPayouts!H${rowIndex}`,
       valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [['PAID']] }
+      requestBody: { values: [[new Date().toISOString()]] }
     }));
-    
-    // Update notes
     await retryApiCall(() => svc.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
       range: `OwnerPayouts!I${rowIndex}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [['PAID']] }
+    }));
+    await retryApiCall(() => svc.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID,
+      range: `OwnerPayouts!J${rowIndex}`,
       valueInputOption: 'USER_ENTERED',
       requestBody: { values: [[note]] }
     }));

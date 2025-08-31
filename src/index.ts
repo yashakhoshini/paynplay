@@ -278,6 +278,28 @@ function initializeBot() {
 
 const bot = initializeBot();
 
+// Global callback query ack middleware: respond immediately to stop Telegram spinner
+bot.use(async (ctx, next) => {
+  if (ctx.callbackQuery) {
+    try {
+      await ctx.answerCallbackQuery();
+    } catch (e) {
+      // ignore
+    }
+  }
+  await next();
+});
+
+// Helper to parse LOADER_GROUP_ID env var (comma-separated)
+function getLoaderGroupId(): number | null {
+  const raw = String(LOADER_GROUP_ID || process.env.LOADER_GROUP_ID || '').trim();
+  if (!raw) return null;
+  const parts = raw.split(',').map(s => Number(s.trim())).filter(n => Number.isFinite(n));
+  // Prefer negative group chat id; fall back to first numeric entry
+  const chosen = parts.find(n => n < 0) ?? parts[0];
+  return Number.isFinite(chosen) ? chosen : null;
+}
+
 // Add session middleware with timeout
 bot.use(session({ 
   initial,
@@ -585,12 +607,12 @@ bot.callbackQuery(/^WD_CH_(VENMO|ZELLE)$/, async (ctx: MyContext) => {
 // PayPal owner payout
 bot.callbackQuery('WD_CH_PAYPAL', async (ctx: MyContext) => {
   try {
+    // For PayPal withdrawals, treat as direct payout: collect player's PayPal email
     ctx.session.payoutType = 'OWNER';
     ctx.session.channel = 'PAYPAL';
-    ctx.session.step = "WITHDRAW_AMOUNT";
-    
-    const ownerHandle = FIXED_WALLETS.PAYPAL || 'Owner';
-    await ctx.editMessageText(`PayPal withdrawal will be sent to: ${ownerHandle}\n\n${MSG.withdrawAmountPrompt}`);
+    ctx.session.method = 'PAYPAL';
+    ctx.session.step = "WITHDRAW_TAG";
+    await ctx.editMessageText('Enter your PayPal email (where the club should pay you):');
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] PayPal withdrawal setup failed:`, error);
     await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
@@ -806,7 +828,7 @@ bot.on("message:text", async (ctx: MyContext) => {
            user_id: ctx.from?.id || 0,
            username,
            amount_usd: ctx.session.externalAmount || 0,
-           method: 'EXTERNAL',
+           method: 'CARD',
            reference: ctx.session.externalReference,
            created_at_iso: new Date().toISOString(),
            recorded_by_user_id: ctx.from?.id || 0
@@ -872,16 +894,17 @@ async function handleAmount(ctx: MyContext) {
     }
 
     // 2) Post to loader group WITH Mark Paid button
-    const groupId = Number(process.env.LOADER_GROUP_ID);
-    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Loader group ID:`, groupId, 'Is finite:', Number.isFinite(groupId));
+    const groupId = getLoaderGroupId();
+    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Loader group ID:`, groupId);
     
+    const callbackRequestId = match.type === 'CASHOUT' ? (match.request_id || 'NONE') : 'NONE';
     const kb = {
       inline_keyboard: [
-        [{ text: "✅ Mark Paid", callback_data: `MARKPAID:${buyinId}:${match.type === "CASHOUT" ? match.request_id || '' : ''}` }]
+        [{ text: "✅ Mark Paid", callback_data: `MARKPAID:${buyinId}:${callbackRequestId}` }]
       ]
     };
     
-    if (Number.isFinite(groupId)) {
+    if (groupId != null) {
       try {
         const text = truncateMessage(MSG.groupCard(playerTag, amount, settings.CURRENCY, match.method, recv));
         console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Posting to group:`, groupId, 'with button:', JSON.stringify(kb));
@@ -916,7 +939,7 @@ async function handleAmount(ctx: MyContext) {
 }
 
 // Restricted Mark Paid handler
-bot.callbackQuery(/^MARKPAID:(.+?):(.+)$/, async (ctx: MyContext) => {
+bot.callbackQuery(/^MARKPAID:([^:]+):([^:]*)$/, async (ctx: MyContext) => {
   try {
     const fromId = ctx.from?.id;
     if (!fromId) return;
@@ -933,7 +956,7 @@ bot.callbackQuery(/^MARKPAID:(.+?):(.+)$/, async (ctx: MyContext) => {
 
     // Validate callback data
     const callbackData = ctx.callbackQuery?.data || '';
-    const validation = SecurityValidator.validateCallbackData(callbackData, /^MARKPAID:(.+?):(.+)$/);
+    const validation = SecurityValidator.validateCallbackData(callbackData, /^MARKPAID:([^:]+):([^:]*)$/);
     if (!validation.valid) {
       logSecurityEvent('INVALID_MARKPAID_CALLBACK', fromId, callbackData);
       await ctx.answerCallbackQuery({ text: "Invalid callback data", show_alert: true });
@@ -951,19 +974,18 @@ bot.callbackQuery(/^MARKPAID:(.+?):(.+)$/, async (ctx: MyContext) => {
     }
 
     const buyinId = ctx.match?.[1];
-    const requestId = ctx.match?.[2]; // Empty string means owner route (no cashout row to mark)
+    const requestId = ctx.match?.[2]; // 'NONE' or empty string for owner route
 
     // Update Google Sheet if a cashout row exists (non-blocking)
     const iso = new Date().toISOString();
-    if (requestId && requestId.trim() !== '') {
+    if (requestId && requestId !== 'NONE') {
       // Update UI immediately, then update sheet in background
-      updateWithdrawalStatusById(requestId, 'PAID', `Marked as paid by ${ctx.from?.username ? '@' + ctx.from.username : ctx.from?.first_name || 'Loader'} (${fromId})`)
+      updateWithdrawalStatusById(requestId, 'PAID', `${fromId}`)
         .then(() => {
           console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Sheet updated successfully for ${requestId}`);
         })
         .catch((e) => {
           console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] updateWithdrawalStatusById failed:`, e);
-          // Sheet update failed, but UI is already updated
         });
     }
 
@@ -1093,15 +1115,37 @@ async function startWithdrawFlow(ctx: MyContext) {
 
 async function showWithdrawSummary(ctx: MyContext) {
   try {
-    if (!ctx.from || !ctx.session.method || !ctx.session.amount || !ctx.session.tag) {
+    if (!ctx.from || !ctx.session.amount) {
       await ctx.reply("Missing withdrawal information. Please start over with /withdraw");
       return;
     }
-    
-    const summary = truncateMessage(MSG.withdrawSummary(ctx.session.method, ctx.session.amount, ctx.session.tag));
+    const isCircle = ctx.session.payoutType === 'CIRCLE';
+    let summary = '';
+    if (isCircle) {
+      if (!ctx.session.method || !ctx.session.tag) {
+        await ctx.reply("Missing method or tag. Please start over with /withdraw");
+        return;
+      }
+      summary = MSG.withdrawSummary(ctx.session.method, ctx.session.amount, ctx.session.tag);
+    } else {
+      // Owner payout: destination is PayPal email or crypto address
+      const dest = ctx.session.channel === 'CRYPTO' ? ctx.session.cryptoAddress : ctx.session.tag;
+      if (!dest) {
+        await ctx.reply('Missing payout destination. Please provide your PayPal email or wallet address.');
+        return;
+      }
+      const methodLabel = ctx.session.channel === 'CRYPTO'
+        ? `${ctx.session.cryptoCoin || 'CRYPTO'}`
+        : ctx.session.channel || 'OWNER';
+      summary =
+        `Review your withdrawal:\n` +
+        `• Method: ${methodLabel}\n` +
+        `• Amount: $${ctx.session.amount.toFixed(2)}\n` +
+        `• Destination: ${dest}\n\n` +
+        `Tap "Submit Withdrawal" to send this to loaders.`;
+    }
     const kb = new InlineKeyboard().text("Submit Withdrawal", "WITHDRAW_SUBMIT");
-    
-    await ctx.reply(summary, { reply_markup: kb });
+    await ctx.reply(truncateMessage(summary), { reply_markup: kb });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Show withdraw summary failed:`, error);
     throw error;
@@ -1117,115 +1161,83 @@ async function handleWithdrawSubmit(ctx: MyContext) {
       await ctx.answerCallbackQuery({ text: "Missing withdrawal information. Please start over with /withdraw", show_alert: true });
       return;
     }
-    
-    // Generate unique request ID
     const requestId = `wd_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-    
-    const username = ctx.from.username ? `@${ctx.from.username}` : `${ctx.from.first_name || ""} ${ctx.from.last_name || ""}`.trim();
-    
+    const username = ctx.from.username ? `@${ctx.from.username}` : `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim();
     try {
-      // Get available methods to determine if this is circle or owner
-      const { circleMethods, ownerMethods } = await getAvailableMethods();
-             const isCircleMethod = method ? circleMethods.includes(method) : false;
-      
+      const { circleMethods } = await getAvailableMethods();
+      const isCircleMethod = ctx.session.payoutType === 'CIRCLE' || (!!ctx.session.method && circleMethods.includes(ctx.session.method));
       if (isCircleMethod) {
-        // Circle withdrawal - use existing flow
-        if (!method || !tag) {
-          await ctx.answerCallbackQuery({ text: "Missing withdrawal information. Please start over with /withdraw", show_alert: true });
+        // Circle withdrawal: record player's tag and queue it
+        if (!ctx.session.method || !ctx.session.tag) {
+          await ctx.answerCallbackQuery({ text: "Missing method or tag. Start over with /withdraw", show_alert: true });
           return;
         }
-        
         await appendWithdrawalCircle({
           request_id: requestId,
           user_id: ctx.from.id,
           username,
           amount_usd: amount,
-          method: method!,
-          payment_tag_or_address: tag!,
+          method: ctx.session.method!,
+          payment_tag_or_address: ctx.session.tag!,
           request_timestamp_iso: requestTimestampISO,
           notes: 'Circle withdrawal request'
         });
-        
         await ctx.answerCallbackQuery();
         await ctx.editMessageText(MSG.withdrawSubmitted);
-        
-        // Send approval card to loaders group
-        const groupId = Number(process.env.LOADER_GROUP_ID);
-        if (Number.isFinite(groupId)) {
-          const card = truncateMessage(MSG.withdrawCard(requestId, username, ctx.from.id, method, amount, tag, requestTimestampISO));
-          const kb = {
-            inline_keyboard: [[{ text: "✅ Confirm Withdrawal", callback_data: `WITHDRAW_CONFIRM_${requestId}` }]]
-          };
-          
+        const groupId = getLoaderGroupId();
+        if (groupId != null) {
+          const card =
+            `🧾 *Withdrawal (Circle)*\n` +
+            `ID: ${requestId}\nUser: ${username} (${ctx.from.id})\n` +
+            `Method: ${ctx.session.method}\nAmount: $${amount.toFixed(2)}\nTag: ${ctx.session.tag}\n` +
+            `Requested at: ${requestTimestampISO}\nStatus: QUEUED`;
           try {
-            await bot.api.sendMessage(groupId, card, { 
-              parse_mode: "Markdown", 
-              reply_markup: kb 
-            });
-          } catch (error) {
-            console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error posting withdrawal request to group:`, error);
-            // Fallback: post to private chat
-            const fallbackText = `🧾 *Withdrawal Request* (Group posting failed)\n\n` + card;
-            await ctx.reply(fallbackText, { parse_mode: "Markdown", reply_markup: kb });
+            await bot.api.sendMessage(groupId, truncateMessage(card), { parse_mode: 'Markdown' });
+          } catch (e) {
+            console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Circle withdraw notify failed:`, e);
           }
-        } else {
-          console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] No valid LOADER_GROUP_ID found, posting withdrawal request to private chat`);
-          const card = truncateMessage(MSG.withdrawCard(requestId, username, ctx.from.id, method, amount, tag, requestTimestampISO));
-          const kb = {
-            inline_keyboard: [[{ text: "✅ Mark Paid", callback_data: `WITHDRAW_CONFIRM_${requestId}` }]]
-          };
-          await ctx.reply(card, { parse_mode: "Markdown", reply_markup: kb });
         }
-        
       } else {
-        // Owner withdrawal - goes to Withdrawals with LOGGED status and Owner Payouts
-        if (!method || !tag) {
-          await ctx.answerCallbackQuery({ text: "Missing withdrawal information. Please start over with /withdraw", show_alert: true });
+        // Owner payout: record player's PayPal email or crypto address
+        const dest = ctx.session.channel === 'CRYPTO' ? ctx.session.cryptoAddress : ctx.session.tag;
+        const methodLabel = ctx.session.channel === 'CRYPTO' ? (ctx.session.cryptoCoin || 'CRYPTO') : (ctx.session.channel || 'OWNER');
+        if (!dest || !methodLabel) {
+          await ctx.answerCallbackQuery({ text: "Missing payout destination.", show_alert: true });
           return;
         }
-        
         await appendWithdrawalOwner({
           request_id: requestId,
           user_id: ctx.from.id,
           username,
           amount_usd: amount,
-          method: method!,
-          payment_tag_or_address: tag!,
+          method: methodLabel,
+          payment_tag_or_address: dest,
           request_timestamp_iso: requestTimestampISO,
-          notes: 'Owner withdrawal request'
+          notes: 'Owner payout request'
         });
-        
         await ctx.answerCallbackQuery();
-        await ctx.editMessageText('Owner withdrawal request submitted successfully.');
-        
-        // Send approval card to loaders group
-        const groupId = Number(process.env.LOADER_GROUP_ID);
-        if (Number.isFinite(groupId)) {
-          const card = `🧾 *Owner Withdrawal Request*\n\nUser: ${username} (${ctx.from.id})\nAmount: $${amount}\nMethod: ${method}\nDestination: ${tag}\n\nRequest ID: ${requestId}`;
-          const kb = {
-            inline_keyboard: [[{ text: "✅ Mark Paid", callback_data: `WITHDRAW_CONFIRM_${requestId}` }]]
-          };
-          
+        await ctx.editMessageText('Withdrawal submitted for direct payout. Loaders will mark it paid once processed.');
+        const groupId = getLoaderGroupId();
+        if (groupId != null) {
+          const card =
+            `🧾 *Owner Payout Request*\n` +
+            `ID: ${requestId}\nUser: ${username} (${ctx.from.id})\n` +
+            `Method: ${methodLabel}\nAmount: $${amount.toFixed(2)}\nDestination: ${dest}\n` +
+            `Requested at: ${requestTimestampISO}\nStatus: PENDING`;
+          const kb = { inline_keyboard: [[{ text: '✅ Mark Paid', callback_data: `WITHDRAW_CONFIRM_${requestId}` }]] };
           try {
-            await bot.api.sendMessage(groupId, card, { 
-              parse_mode: "Markdown", 
-              reply_markup: kb 
-            });
-          } catch (error) {
-            console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error posting owner withdrawal request to group:`, error);
-            // Fallback: post to private chat
-            const fallbackText = `🧾 *Owner Withdrawal Request* (Group posting failed)\n\n` + card;
-            await ctx.reply(fallbackText, { parse_mode: "Markdown", reply_markup: kb });
+            await bot.api.sendMessage(groupId, truncateMessage(card), { parse_mode: 'Markdown', reply_markup: kb });
+          } catch (e) {
+            console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Owner payout notify failed:`, e);
+            await ctx.reply(card, { parse_mode: 'Markdown', reply_markup: kb });
           }
         }
       }
-      
     } catch (error) {
       console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error creating withdrawal request:`, error);
-      await ctx.answerCallbackQuery({ text: "Error creating withdrawal request. Please try again.", show_alert: true });
+      await ctx.answerCallbackQuery({ text: 'Error creating withdrawal request. Please try again.', show_alert: true });
     }
-    
-    ctx.session = {}; // Reset session
+    ctx.session = {};
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Handle withdraw submit failed:`, error);
     throw error;
@@ -1248,13 +1260,20 @@ async function handleWithdrawConfirm(ctx: MyContext) {
     
     try {
       // Update withdrawal status to PAID
-      await updateWithdrawalStatusById(requestId, 'PAID', `Marked as paid by ${ctx.from?.username ? '@' + ctx.from.username : ctx.from?.first_name || 'Admin'} (${fromId})`);
+      await updateWithdrawalStatusById(requestId, 'PAID', `${fromId}`);
       
       // Update the message to show confirmation
       const verifier = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || "Admin"} (${fromId})`;
       await ctx.editMessageText(`✅ Withdrawal marked as paid by ${verifier} at ${new Date().toISOString()}`, {
         reply_markup: { inline_keyboard: [] }
       });
+      
+      // Also mark OwnerPayouts row as paid if this was a direct payout
+      try {
+        await markOwnerPayoutPaid(requestId, fromId, `Marked paid by ${verifier}`);
+      } catch (e) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] markOwnerPayoutPaid failed:`, e);
+      }
       
       await ctx.answerCallbackQuery({ text: "Withdrawal marked as paid ✅" });
       
@@ -1450,19 +1469,19 @@ async function getAvailableMethods(): Promise<{
     // Get circle methods from settings
     const circleMethods = settings.METHODS_CIRCLE || METHODS_CIRCLE;
     
-    // Get owner methods from settings (owner payment addresses)
-    const ownerMethods = [];
-         if (settings.APPLE_PAY_HANDLE) ownerMethods.push('APPLEPAY');
-     if (settings.CASHAPP_HANDLE) ownerMethods.push('CASHAPP');
-     if (settings.PAYPAL_EMAIL) ownerMethods.push('PAYPAL');
-     if (settings.CRYPTO_WALLET_BTC) ownerMethods.push('BTC');
-     if (settings.CRYPTO_WALLET_ETH) ownerMethods.push('ETH');
-     if (settings.CRYPTO_WALLET) {
-       // Add other crypto networks
-       const networks = settings.CRYPTO_NETWORKS;
+    // Build owner methods list from configured handles
+    const ownerMethods: string[] = [];
+    if (settings.APPLE_PAY_HANDLE) ownerMethods.push('APPLE PAY');
+    if (settings.CASHAPP_HANDLE) ownerMethods.push('CASHAPP');
+    if (settings.PAYPAL_EMAIL) ownerMethods.push('PAYPAL');
+    if (settings.CRYPTO_WALLET_BTC) ownerMethods.push('BTC');
+    if (settings.CRYPTO_WALLET_ETH) ownerMethods.push('ETH');
+    if (settings.CRYPTO_WALLET) {
+      const networks = settings.CRYPTO_NETWORKS || [];
       for (const network of networks) {
-        if (network !== 'BTC' && network !== 'ETH') {
-          ownerMethods.push(network);
+        const upper = network.trim().toUpperCase();
+        if (upper !== 'BTC' && upper !== 'ETH' && !ownerMethods.includes(upper)) {
+          ownerMethods.push(upper);
         }
       }
     }
