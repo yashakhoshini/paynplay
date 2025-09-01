@@ -1,0 +1,678 @@
+[1mdiff --git a/dist/index.js b/dist/index.js[m
+[1mindex 66a909d..0504d45 100644[m
+[1m--- a/dist/index.js[m
+[1m+++ b/dist/index.js[m
+[36m@@ -1,9 +1,9 @@[m
+ import { Bot, session, InlineKeyboard } from "grammy";[m
+ import express from "express";[m
+ import { webhookCallback } from "grammy";[m
+[31m-import { BOT_TOKEN, BASE_URL, PORT, PRIVACY_HINTS_ENABLED, EFFECTIVE_ALLOWED_USER_IDS, MAX_BUYIN_AMOUNT, MIN_BUYIN_AMOUNT, SESSION_TIMEOUT_MS, MAX_MESSAGE_LENGTH, CLIENT_NAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE, METHODS_CIRCLE, METHODS_EXTERNAL_LINK, STRIPE_CHECKOUT_URL, WITHDRAW_STALE_HOURS, FIXED_WALLETS, METHODS_ENABLED_DEFAULT, DEFAULT_CURRENCY, DEFAULT_FAST_FEE, OWNER_FALLBACK_THRESHOLD, OWNER_TG_USERNAME } from "./config.js";[m
+[32m+[m[32mimport { BOT_TOKEN, BASE_URL, PORT, LOADER_GROUP_ID, PRIVACY_HINTS_ENABLED, EFFECTIVE_ALLOWED_USER_IDS, MAX_BUYIN_AMOUNT, MIN_BUYIN_AMOUNT, SESSION_TIMEOUT_MS, MAX_MESSAGE_LENGTH, CLIENT_NAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE, METHODS_CIRCLE, METHODS_EXTERNAL_LINK, STRIPE_CHECKOUT_URL, WITHDRAW_STALE_HOURS, FIXED_WALLETS, METHODS_ENABLED_DEFAULT, DEFAULT_CURRENCY, DEFAULT_FAST_FEE, OWNER_FALLBACK_THRESHOLD, OWNER_TG_USERNAME } from "./config.js";[m
+ import { MSG } from "./messages.js";[m
+[31m-import { getSettings, getOwnerAccounts, appendWithdrawalCircle, appendWithdrawalOwner, updateWithdrawalStatusById, appendExternalDeposit, markStaleCashAppCircleWithdrawals } from "./sheets.js";[m
+[32m+[m[32mimport { getSettings, getOwnerAccounts, appendWithdrawalCircle, appendWithdrawalOwner, updateWithdrawalStatusById, appendExternalDeposit, markOwnerPayoutPaid, markStaleCashAppCircleWithdrawals } from "./sheets.js";[m
+ import { findMatch } from "./matcher.js";[m
+ import { SecurityValidator, logSecurityEvent } from "./security.js";[m
+ function initial() {[m
+[36m@@ -188,6 +188,28 @@[m [mfunction initializeBot() {[m
+     return new Bot(BOT_TOKEN);[m
+ }[m
+ const bot = initializeBot();[m
+[32m+[m[32m// Global callback query ack middleware: respond immediately to stop Telegram spinner[m
+[32m+[m[32mbot.use(async (ctx, next) => {[m
+[32m+[m[32m    if (ctx.callbackQuery) {[m
+[32m+[m[32m        try {[m
+[32m+[m[32m            await ctx.answerCallbackQuery();[m
+[32m+[m[32m        }[m
+[32m+[m[32m        catch (e) {[m
+[32m+[m[32m            // ignore[m
+[32m+[m[32m        }[m
+[32m+[m[32m    }[m
+[32m+[m[32m    await next();[m
+[32m+[m[32m});[m
+[32m+[m[32m// Helper to parse LOADER_GROUP_ID env var (comma-separated)[m
+[32m+[m[32mfunction getLoaderGroupId() {[m
+[32m+[m[32m    const raw = String(LOADER_GROUP_ID || process.env.LOADER_GROUP_ID || '').trim();[m
+[32m+[m[32m    if (!raw)[m
+[32m+[m[32m        return null;[m
+[32m+[m[32m    const parts = raw.split(',').map(s => Number(s.trim())).filter(n => Number.isFinite(n));[m
+[32m+[m[32m    // Prefer negative group chat id; fall back to first numeric entry[m
+[32m+[m[32m    const chosen = parts.find(n => n < 0) ?? parts[0];[m
+[32m+[m[32m    return Number.isFinite(chosen) ? chosen : null;[m
+[32m+[m[32m}[m
+ // Add session middleware with timeout[m
+ bot.use(session({[m
+     initial,[m
+[36m@@ -301,6 +323,7 @@[m [mbot.command("start", async (ctx) => {[m
+ // Buy-in start[m
+ bot.callbackQuery("BUYIN", async (ctx) => {[m
+     try {[m
+[32m+[m[32m        await ctx.answerCallbackQuery().catch(() => { });[m
+         let settings;[m
+         let owners = [];[m
+         try {[m
+[36m@@ -352,6 +375,7 @@[m [mbot.callbackQuery("BUYIN", async (ctx) => {[m
+ // Method chosen[m
+ bot.callbackQuery(/METHOD_(.+)/, async (ctx) => {[m
+     try {[m
+[32m+[m[32m        await ctx.answerCallbackQuery().catch(() => { });[m
+         const method = ctx.match?.[1];[m
+         if (!method)[m
+             return;[m
+[36m@@ -425,6 +449,7 @@[m [mbot.callbackQuery(/AMT_(\d+)/, async (ctx) => {[m
+ // Custom amount prompt[m
+ bot.callbackQuery("AMT_CUSTOM", async (ctx) => {[m
+     try {[m
+[32m+[m[32m        await ctx.answerCallbackQuery().catch(() => { });[m
+         await ctx.editMessageText(`Please enter the amount ($${MIN_BUYIN_AMOUNT}-$${MAX_BUYIN_AMOUNT}):`);[m
+     }[m
+     catch (error) {[m
+[36m@@ -435,6 +460,7 @@[m [mbot.callbackQuery("AMT_CUSTOM", async (ctx) => {[m
+ // Withdrawal button handler[m
+ bot.callbackQuery("WITHDRAW", async (ctx) => {[m
+     try {[m
+[32m+[m[32m        await ctx.answerCallbackQuery().catch(() => { });[m
+         await startWithdrawFlow(ctx);[m
+     }[m
+     catch (error) {[m
+[36m@@ -442,22 +468,10 @@[m [mbot.callbackQuery("WITHDRAW", async (ctx) => {[m
+         await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });[m
+     }[m
+ });[m
+[31m-// Withdrawal channel selection[m
+[31m-bot.callbackQuery("WITHDRAW_START", async (ctx) => {[m
+[31m-    try {[m
+[31m-        const kb = new InlineKeyboard()[m
+[31m-            .text('Venmo', 'WD_CH_VENMO').text('Zelle', 'WD_CH_ZELLE').row()[m
+[31m-            .text('PayPal', 'WD_CH_PAYPAL').text('Crypto', 'WD_CH_CRYPTO');[m
+[31m-        await ctx.editMessageText('Choose your withdrawal channel:', { reply_markup: kb });[m
+[31m-    }[m
+[31m-    catch (error) {[m
+[31m-        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Withdrawal channel selection failed:`, error);[m
+[31m-        await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });[m
+[31m-    }[m
+[31m-});[m
+[31m-// Circle withdrawal channels[m
+[31m-bot.callbackQuery(/^WD_CH_(VENMO|ZELLE)$/, async (ctx) => {[m
+[32m+[m[32m// Circle withdrawal channels (include CASHAPP too)[m
+[32m+[m[32mbot.callbackQuery(/^WD_CH_(VENMO|ZELLE|CASHAPP)$/, async (ctx) => {[m
+     try {[m
+[32m+[m[32m        await ctx.answerCallbackQuery().catch(() => { });[m
+         const method = ctx.match?.[1];[m
+         if (!method)[m
+             return;[m
+[36m@@ -474,11 +488,11 @@[m [mbot.callbackQuery(/^WD_CH_(VENMO|ZELLE)$/, async (ctx) => {[m
+ // PayPal owner payout[m
+ bot.callbackQuery('WD_CH_PAYPAL', async (ctx) => {[m
+     try {[m
+[32m+[m[32m        await ctx.answerCallbackQuery().catch(() => { });[m
+         ctx.session.payoutType = 'OWNER';[m
+         ctx.session.channel = 'PAYPAL';[m
+         ctx.session.step = "WITHDRAW_AMOUNT";[m
+[31m-        const ownerHandle = FIXED_WALLETS.PAYPAL || 'Owner';[m
+[31m-        await ctx.editMessageText(`PayPal withdrawal will be sent to: ${ownerHandle}\n\n${MSG.withdrawAmountPrompt}`);[m
+[32m+[m[32m        await ctx.editMessageText(`You chose PayPal withdrawal.\n\n${MSG.withdrawAmountPrompt}`);[m
+     }[m
+     catch (error) {[m
+         console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] PayPal withdrawal setup failed:`, error);[m
+[36m@@ -488,6 +502,7 @@[m [mbot.callbackQuery('WD_CH_PAYPAL', async (ctx) => {[m
+ // Crypto withdrawal[m
+ bot.callbackQuery('WD_CH_CRYPTO', async (ctx) => {[m
+     try {[m
+[32m+[m[32m        await ctx.answerCallbackQuery().catch(() => { });[m
+         const coins = ['BTC', 'ETH', 'LTC', 'USDT_ERC20', 'USDT_TRC20', 'XRP', 'SOL'].filter(c => !!FIXED_WALLETS[c]);[m
+         if (coins.length === 0) {[m
+             await ctx.editMessageText('No crypto wallets configured. Please contact support.');[m
+[36m@@ -499,15 +514,12 @@[m [mbot.callbackQuery('WD_CH_CRYPTO', async (ctx) => {[m
+         const kb = new InlineKeyboard();[m
+         for (let i = 0; i < coins.length; i += 2) {[m
+             const row = coins.slice(i, i + 2);[m
+[31m-            if (row.length === 1) {[m
+[32m+[m[32m            if (row.length === 1)[m
+                 kb.text(row[0], `CRYPTO_${row[0]}`);[m
+[31m-            }[m
+[31m-            else {[m
+[32m+[m[32m            else[m
+                 kb.text(row[0], `CRYPTO_${row[0]}`).text(row[1], `CRYPTO_${row[1]}`);[m
+[31m-            }[m
+[31m-            if (i + 2 < coins.length) {[m
+[32m+[m[32m            if (i + 2 < coins.length)[m
+                 kb.row();[m
+[31m-            }[m
+         }[m
+         await ctx.editMessageText('Choose your crypto currency:', { reply_markup: kb });[m
+     }[m
+[36m@@ -519,6 +531,7 @@[m [mbot.callbackQuery('WD_CH_CRYPTO', async (ctx) => {[m
+ // Crypto coin selection[m
+ bot.callbackQuery(/^CRYPTO_(.+)$/, async (ctx) => {[m
+     try {[m
+[32m+[m[32m        await ctx.answerCallbackQuery().catch(() => { });[m
+         const coin = ctx.match?.[1];[m
+         if (!coin)[m
+             return;[m
+[36m@@ -535,12 +548,50 @@[m [mbot.callbackQuery(/^CRYPTO_(.+)$/, async (ctx) => {[m
+ // Withdrawal method selection[m
+ bot.callbackQuery(/WITHDRAW_METHOD_(.+)/, async (ctx) => {[m
+     try {[m
+[32m+[m[32m        await ctx.answerCallbackQuery().catch(() => { });[m
+         const method = ctx.match?.[1];[m
+         if (!method)[m
+             return;[m
+[31m-        ctx.session.method = method;[m
+[31m-        ctx.session.step = "WITHDRAW_AMOUNT";[m
+[31m-        await ctx.editMessageText(MSG.withdrawAmountPrompt);[m
+[32m+[m[32m        // Decide payout type based on method[m
+[32m+[m[32m        const settings = await getCachedSettings();[m
+[32m+[m[32m        const upper = method.toUpperCase();[m
+[32m+[m[32m        ctx.session.method = upper;[m
+[32m+[m[32m        if (settings.METHODS_CIRCLE.includes(upper)) {[m
+[32m+[m[32m            ctx.session.payoutType = 'CIRCLE';[m
+[32m+[m[32m            ctx.session.step = "WITHDRAW_AMOUNT";[m
+[32m+[m[32m            await ctx.editMessageText(MSG.withdrawAmountPrompt);[m
+[32m+[m[32m        }[m
+[32m+[m[32m        else if (upper === 'PAYPAL') {[m
+[32m+[m[32m            ctx.session.payoutType = 'OWNER';[m
+[32m+[m[32m            ctx.session.channel = 'PAYPAL';[m
+[32m+[m[32m            ctx.session.step = "WITHDRAW_AMOUNT";[m
+[32m+[m[32m            await ctx.editMessageText(MSG.withdrawAmountPrompt);[m
+[32m+[m[32m        }[m
+[32m+[m[32m        else if (upper === 'CRYPTO') {[m
+[32m+[m[32m            // route to crypto chooser[m
+[32m+[m[32m            ctx.session.payoutType = 'OWNER';[m
+[32m+[m[32m            ctx.session.channel = 'CRYPTO';[m
+[32m+[m[32m            ctx.session.step = "CRYPTO_COIN";[m
+[32m+[m[32m            const coins = ['BTC', 'ETH', 'LTC', 'USDT_ERC20', 'USDT_TRC20', 'XRP', 'SOL'].filter(c => !!FIXED_WALLETS[c]);[m
+[32m+[m[32m            const kb = new InlineKeyboard();[m
+[32m+[m[32m            for (let i = 0; i < coins.length; i += 2) {[m
+[32m+[m[32m                const row = coins.slice(i, i + 2);[m
+[32m+[m[32m                if (row.length === 1)[m
+[32m+[m[32m                    kb.text(row[0], `CRYPTO_${row[0]}`);[m
+[32m+[m[32m                else[m
+[32m+[m[32m                    kb.text(row[0], `CRYPTO_${row[0]}`).text(row[1], `CRYPTO_${row[1]}`);[m
+[32m+[m[32m                if (i + 2 < coins.length)[m
+[32m+[m[32m                    kb.row();[m
+[32m+[m[32m            }[m
+[32m+[m[32m            await ctx.editMessageText('Choose your crypto currency:', { reply_markup: kb });[m
+[32m+[m[32m        }[m
+[32m+[m[32m        else {[m
+[32m+[m[32m            // default OWNER path for any other external method[m
+[32m+[m[32m            ctx.session.payoutType = 'OWNER';[m
+[32m+[m[32m            ctx.session.channel = upper;[m
+[32m+[m[32m            ctx.session.step = "WITHDRAW_AMOUNT";[m
+[32m+[m[32m            await ctx.editMessageText(MSG.withdrawAmountPrompt);[m
+[32m+[m[32m        }[m
+     }[m
+     catch (error) {[m
+         console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Withdraw method selection failed:`, error);[m
+[36m@@ -606,13 +657,16 @@[m [mbot.on("message:text", async (ctx) => {[m
+                 await ctx.reply(MSG.withdrawTagPrompt);[m
+             }[m
+             else if (ctx.session.payoutType === 'OWNER') {[m
+[31m-                // For owner payouts, we need the user's wallet address (for crypto) or just proceed[m
+[32m+[m[32m                // For owner payouts, we need the user's destination:[m
+                 if (ctx.session.channel === 'CRYPTO') {[m
+                     ctx.session.step = "CRYPTO_ADDRESS";[m
+                     await ctx.reply('Please enter your wallet address:');[m
+                 }[m
+[32m+[m[32m                else if (ctx.session.channel === 'PAYPAL') {[m
+[32m+[m[32m                    ctx.session.step = "WITHDRAW_TAG";[m
+[32m+[m[32m                    await ctx.reply('Please enter your PayPal email to receive the payout:');[m
+[32m+[m[32m                }[m
+                 else {[m
+[31m-                    // PayPal doesn't need additional info[m
+                     ctx.session.requestTimestampISO = new Date().toISOString();[m
+                     await showWithdrawSummary(ctx);[m
+                 }[m
+[36m@@ -685,7 +739,7 @@[m [mbot.on("message:text", async (ctx) => {[m
+                     user_id: ctx.from?.id || 0,[m
+                     username,[m
+                     amount_usd: ctx.session.externalAmount || 0,[m
+[31m-                    method: 'EXTERNAL',[m
+[32m+[m[32m                    method: 'CARD',[m
+                     reference: ctx.session.externalReference,[m
+                     created_at_iso: new Date().toISOString(),[m
+                     recorded_by_user_id: ctx.from?.id || 0[m
+[36m@@ -738,14 +792,15 @@[m [masync function handleAmount(ctx) {[m
+             await ctx.reply(truncateMessage(MSG.playerOwnerPay(amount, settings.CURRENCY, match.method, match.owner?.handle || "<ask owner>", match.owner?.instructions)), { parse_mode: "Markdown" });[m
+         }[m
+         // 2) Post to loader group WITH Mark Paid button[m
+[31m-        const groupId = Number(process.env.LOADER_GROUP_ID);[m
+[31m-        console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Loader group ID:`, groupId, 'Is finite:', Number.isFinite(groupId));[m
+[32m+[m[32m        const groupId = getLoaderGroupId();[m
+[32m+[m[32m        console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Loader group ID:`, groupId);[m
+[32m+[m[32m        const callbackRequestId = match.type === 'CASHOUT' ? (match.request_id || 'NONE') : 'NONE';[m
+         const kb = {[m
+             inline_keyboard: [[m
+[31m-                [{ text: "✅ Mark Paid", callback_data: `MARKPAID:${buyinId}:${match.type === "CASHOUT" ? match.request_id || '' : ''}` }][m
+[32m+[m[32m                [{ text: "✅ Mark Paid", callback_data: `MARKPAID:${buyinId}:${callbackRequestId}` }][m
+             ][m
+         };[m
+[31m-        if (Number.isFinite(groupId)) {[m
+[32m+[m[32m        if (groupId != null) {[m
+             try {[m
+                 const text = truncateMessage(MSG.groupCard(playerTag, amount, settings.CURRENCY, match.method, recv));[m
+                 console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Posting to group:`, groupId, 'with button:', JSON.stringify(kb));[m
+[36m@@ -779,11 +834,12 @@[m [masync function handleAmount(ctx) {[m
+     }[m
+ }[m
+ // Restricted Mark Paid handler[m
+[31m-bot.callbackQuery(/^MARKPAID:(.+?):(.+)$/, async (ctx) => {[m
+[32m+[m[32mbot.callbackQuery(/^MARKPAID:([^:]+):([^:]*)$/, async (ctx) => {[m
+     try {[m
+         const fromId = ctx.from?.id;[m
+         if (!fromId)[m
+             return;[m
+[32m+[m[32m        await ctx.answerCallbackQuery().catch(() => { });[m
+         // Rate limiting check[m
+         const rateLimit = SecurityValidator.checkRateLimit(fromId);[m
+         if (!rateLimit.allowed) {[m
+[36m@@ -795,7 +851,7 @@[m [mbot.callbackQuery(/^MARKPAID:(.+?):(.+)$/, async (ctx) => {[m
+         }[m
+         // Validate callback data[m
+         const callbackData = ctx.callbackQuery?.data || '';[m
+[31m-        const validation = SecurityValidator.validateCallbackData(callbackData, /^MARKPAID:(.+?):(.+)$/);[m
+[32m+[m[32m        const validation = SecurityValidator.validateCallbackData(callbackData, /^MARKPAID:([^:]+):([^:]*)$/);[m
+         if (!validation.valid) {[m
+             logSecurityEvent('INVALID_MARKPAID_CALLBACK', fromId, callbackData);[m
+             await ctx.answerCallbackQuery({ text: "Invalid callback data", show_alert: true });[m
+[36m@@ -811,18 +867,17 @@[m [mbot.callbackQuery(/^MARKPAID:(.+?):(.+)$/, async (ctx) => {[m
+             return;[m
+         }[m
+         const buyinId = ctx.match?.[1];[m
+[31m-        const requestId = ctx.match?.[2]; // Empty string means owner route (no cashout row to mark)[m
+[32m+[m[32m        const requestId = ctx.match?.[2]; // 'NONE' or empty string for owner route[m
+         // Update Google Sheet if a cashout row exists (non-blocking)[m
+         const iso = new Date().toISOString();[m
+[31m-        if (requestId && requestId.trim() !== '') {[m
+[32m+[m[32m        if (requestId && requestId !== 'NONE') {[m
+             // Update UI immediately, then update sheet in background[m
+[31m-            updateWithdrawalStatusById(requestId, 'PAID', `Marked as paid by ${ctx.from?.username ? '@' + ctx.from.username : ctx.from?.first_name || 'Loader'} (${fromId})`)[m
+[32m+[m[32m            updateWithdrawalStatusById(requestId, 'PAID', `${fromId}`)[m
+                 .then(() => {[m
+                 console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Sheet updated successfully for ${requestId}`);[m
+             })[m
+                 .catch((e) => {[m
+                 console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] updateWithdrawalStatusById failed:`, e);[m
+[31m-                // Sheet update failed, but UI is already updated[m
+             });[m
+         }[m
+         // Edit the group card message to show confirmation and remove the button[m
+[36m@@ -902,41 +957,11 @@[m [masync function startWithdrawFlow(ctx) {[m
+         if (!ctx.from)[m
+             return;[m
+         ctx.session = {}; // Reset session[m
+[31m-        ctx.session.step = "WITHDRAW_METHOD";[m
+[31m-        // Get available methods from Settings + env fallback[m
+[31m-        const { circleMethods, ownerMethods, allMethods } = await getAvailableMethods();[m
+[31m-        // Create keyboard with available methods[m
+[31m-        const kb = new InlineKeyboard();[m
+[31m-        // Add circle methods first (for matching)[m
+[31m-        const circleButtons = [];[m
+[31m-        for (const method of circleMethods) {[m
+[31m-            circleButtons.push({ text: method, callback: `WITHDRAW_METHOD_${method}` });[m
+[31m-        }[m
+[31m-        // Add owner methods (for owner payouts)[m
+[31m-        const ownerButtons = [];[m
+[31m-        for (const method of ownerMethods) {[m
+[31m-            ownerButtons.push({ text: method, callback: `WITHDRAW_METHOD_${method}` });[m
+[31m-        }[m
+[31m-        // Combine all buttons[m
+[31m-        const allButtons = [...circleButtons, ...ownerButtons];[m
+[31m-        // Check if any methods are available[m
+[31m-        if (allButtons.length === 0) {[m
+[31m-            await ctx.editMessageText("No payment methods are currently available. Please contact the owner to set up payment methods.");[m
+[31m-            return;[m
+[31m-        }[m
+[31m-        // Add methods to keyboard (2 per row)[m
+[31m-        for (let i = 0; i < allButtons.length; i += 2) {[m
+[31m-            const row = allButtons.slice(i, i + 2);[m
+[31m-            if (row.length === 1) {[m
+[31m-                kb.text(row[0].text, row[0].callback);[m
+[31m-            }[m
+[31m-            else {[m
+[31m-                kb.text(row[0].text, row[0].callback).text(row[1].text, row[1].callback);[m
+[31m-            }[m
+[31m-            if (i + 2 < allButtons.length) {[m
+[31m-                kb.row();[m
+[31m-            }[m
+[31m-        }[m
+[32m+[m[32m        // Present a clear, stable set of withdraw methods[m
+[32m+[m[32m        const kb = new InlineKeyboard()[m
+[32m+[m[32m            .text('Venmo', 'WD_CH_VENMO').text('Zelle', 'WD_CH_ZELLE').row()[m
+[32m+[m[32m            .text('CashApp', 'WD_CH_CASHAPP').row()[m
+[32m+[m[32m            .text('PayPal', 'WD_CH_PAYPAL').text('Crypto', 'WD_CH_CRYPTO');[m
+         await ctx.editMessageText(MSG.withdrawWelcome, { reply_markup: kb });[m
+     }[m
+     catch (error) {[m
+[36m@@ -946,11 +971,47 @@[m [masync function startWithdrawFlow(ctx) {[m
+ }[m
+ async function showWithdrawSummary(ctx) {[m
+     try {[m
+[31m-        if (!ctx.from || !ctx.session.method || !ctx.session.amount || !ctx.session.tag) {[m
+[32m+[m[32m        if (!ctx.from)[m
+[32m+[m[32m            return;[m
+[32m+[m[32m        const { payoutType, channel, method, amount, tag, cryptoAddress } = ctx.session;[m
+[32m+[m[32m        if (!method || !amount) {[m
+             await ctx.reply("Missing withdrawal information. Please start over with /withdraw");[m
+             return;[m
+         }[m
+[31m-        const summary = truncateMessage(MSG.withdrawSummary(ctx.session.method, ctx.session.amount, ctx.session.tag));[m
+[32m+[m[32m        // Validate destination depending on type/channel[m
+[32m+[m[32m        let destination;[m
+[32m+[m[32m        if (payoutType === 'CIRCLE') {[m
+[32m+[m[32m            if (!tag) {[m
+[32m+[m[32m                await ctx.reply("Please provide your handle/phone to receive funds.");[m
+[32m+[m[32m                return;[m
+[32m+[m[32m            }[m
+[32m+[m[32m            destination = tag;[m
+[32m+[m[32m        }[m
+[32m+[m[32m        else {[m
+[32m+[m[32m            if (channel === 'CRYPTO') {[m
+[32m+[m[32m                if (!cryptoAddress) {[m
+[32m+[m[32m                    await ctx.reply("Please provide your wallet address.");[m
+[32m+[m[32m                    return;[m
+[32m+[m[32m                }[m
+[32m+[m[32m                destination = cryptoAddress;[m
+[32m+[m[32m            }[m
+[32m+[m[32m            else if (channel === 'PAYPAL') {[m
+[32m+[m[32m                if (!tag) {[m
+[32m+[m[32m                    await ctx.reply("Please provide your PayPal email.");[m
+[32m+[m[32m                    return;[m
+[32m+[m[32m                }[m
+[32m+[m[32m                destination = tag;[m
+[32m+[m[32m            }[m
+[32m+[m[32m            else {[m
+[32m+[m[32m                // generic external channel uses tag as destination[m
+[32m+[m[32m                if (!tag) {[m
+[32m+[m[32m                    await ctx.reply("Please provide your payout destination.");[m
+[32m+[m[32m                    return;[m
+[32m+[m[32m                }[m
+[32m+[m[32m                destination = tag;[m
+[32m+[m[32m            }[m
+[32m+[m[32m        }[m
+[32m+[m[32m        const summary = truncateMessage(`Review your withdrawal:\n• Method: ${method}\n• Amount: $${amount.toFixed(2)}\n• Destination: ${destination}\n\nTap "Submit Withdrawal" to send this to loaders.`);[m
+         const kb = new InlineKeyboard().text("Submit Withdrawal", "WITHDRAW_SUBMIT");[m
+         await ctx.reply(summary, { reply_markup: kb });[m
+     }[m
+[36m@@ -968,9 +1029,8 @@[m [masync function handleWithdrawSubmit(ctx) {[m
+             await ctx.answerCallbackQuery({ text: "Missing withdrawal information. Please start over with /withdraw", show_alert: true });[m
+             return;[m
+         }[m
+[31m-        // Generate unique request ID[m
+         const requestId = `wd_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;[m
+[31m-        const username = ctx.from.username ? `@${ctx.from.username}` : `${ctx.from.first_name || ""} ${ctx.from.last_name || ""}`.trim();[m
+[32m+[m[32m        const username = ctx.from.username ? `@${ctx.from.username}` : `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim();[m
+         try {[m
+             // Get available methods to determine if this is circle or owner[m
+             const { circleMethods, ownerMethods } = await getAvailableMethods();[m
+[36m@@ -993,38 +1053,25 @@[m [masync function handleWithdrawSubmit(ctx) {[m
+                 });[m
+                 await ctx.answerCallbackQuery();[m
+                 await ctx.editMessageText(MSG.withdrawSubmitted);[m
+[31m-                // Send approval card to loaders group[m
+[31m-                const groupId = Number(process.env.LOADER_GROUP_ID);[m
+[31m-                if (Number.isFinite(groupId)) {[m
+[31m-                    const card = truncateMessage(MSG.withdrawCard(requestId, username, ctx.from.id, method, amount, tag, requestTimestampISO));[m
+[31m-                    const kb = {[m
+[31m-                        inline_keyboard: [[{ text: "✅ Confirm Withdrawal", callback_data: `WITHDRAW_CONFIRM_${requestId}` }]][m
+[31m-                    };[m
+[32m+[m[32m                const groupId = getLoaderGroupId();[m
+[32m+[m[32m                if (groupId != null) {[m
+[32m+[m[32m                    const card = `🧾 *Withdrawal (Circle)*\n` +[m
+[32m+[m[32m                        `ID: ${requestId}\nUser: ${username} (${ctx.from.id})\n` +[m
+[32m+[m[32m                        `Method: ${method}\nAmount: $${amount.toFixed(2)}\nTag: ${tag}\n` +[m
+[32m+[m[32m                        `Requested at: ${requestTimestampISO}\nStatus: QUEUED`;[m
+                     try {[m
+[31m-                        await bot.api.sendMessage(groupId, card, {[m
+[31m-                            parse_mode: "Markdown",[m
+[31m-                            reply_markup: kb[m
+[31m-                        });[m
+[32m+[m[32m                        await bot.api.sendMessage(groupId, truncateMessage(card), { parse_mode: 'Markdown' });[m
+                     }[m
+[31m-                    catch (error) {[m
+[31m-                        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error posting withdrawal request to group:`, error);[m
+[31m-                        // Fallback: post to private chat[m
+[31m-                        const fallbackText = `🧾 *Withdrawal Request* (Group posting failed)\n\n` + card;[m
+[31m-                        await ctx.reply(fallbackText, { parse_mode: "Markdown", reply_markup: kb });[m
+[32m+[m[32m                    catch (e) {[m
+[32m+[m[32m                        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Circle withdraw notify failed:`, e);[m
+                     }[m
+                 }[m
+[31m-                else {[m
+[31m-                    console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] No valid LOADER_GROUP_ID found, posting withdrawal request to private chat`);[m
+[31m-                    const card = truncateMessage(MSG.withdrawCard(requestId, username, ctx.from.id, method, amount, tag, requestTimestampISO));[m
+[31m-                    const kb = {[m
+[31m-                        inline_keyboard: [[{ text: "✅ Mark Paid", callback_data: `WITHDRAW_CONFIRM_${requestId}` }]][m
+[31m-                    };[m
+[31m-                    await ctx.reply(card, { parse_mode: "Markdown", reply_markup: kb });[m
+[31m-                }[m
+             }[m
+             else {[m
+                 // Owner withdrawal - goes to Withdrawals with LOGGED status and Owner Payouts[m
+[31m-                if (!method || !tag) {[m
+[32m+[m[32m                // For OWNER: destination can be PayPal email (tag) or cryptoAddress.[m
+[32m+[m[32m                const destination = ctx.session.channel === 'CRYPTO' ? ctx.session.cryptoAddress : ctx.session.tag;[m
+[32m+[m[32m                if (!method || !destination) {[m
+                     await ctx.answerCallbackQuery({ text: "Missing withdrawal information. Please start over with /withdraw", show_alert: true });[m
+                     return;[m
+                 }[m
+[36m@@ -1034,39 +1081,34 @@[m [masync function handleWithdrawSubmit(ctx) {[m
+                     username,[m
+                     amount_usd: amount,[m
+                     method: method,[m
+[31m-                    payment_tag_or_address: tag,[m
+[32m+[m[32m                    payment_tag_or_address: destination,[m
+                     request_timestamp_iso: requestTimestampISO,[m
+                     notes: 'Owner withdrawal request'[m
+                 });[m
+                 await ctx.answerCallbackQuery();[m
+[31m-                await ctx.editMessageText('Owner withdrawal request submitted successfully.');[m
+[31m-                // Send approval card to loaders group[m
+[31m-                const groupId = Number(process.env.LOADER_GROUP_ID);[m
+[31m-                if (Number.isFinite(groupId)) {[m
+[31m-                    const card = `🧾 *Owner Withdrawal Request*\n\nUser: ${username} (${ctx.from.id})\nAmount: $${amount}\nMethod: ${method}\nDestination: ${tag}\n\nRequest ID: ${requestId}`;[m
+[31m-                    const kb = {[m
+[31m-                        inline_keyboard: [[{ text: "✅ Mark Paid", callback_data: `WITHDRAW_CONFIRM_${requestId}` }]][m
+[31m-                    };[m
+[32m+[m[32m                await ctx.editMessageText('Withdrawal submitted for direct payout. Loaders will mark it paid once processed.');[m
+[32m+[m[32m                const groupId = getLoaderGroupId();[m
+[32m+[m[32m                if (groupId != null) {[m
+[32m+[m[32m                    const card = `🧾 *Owner Payout Request*\n` +[m
+[32m+[m[32m                        `ID: ${requestId}\nUser: ${username} (${ctx.from.id})\n` +[m
+[32m+[m[32m                        `Method: ${method}\nAmount: $${amount.toFixed(2)}\nDestination: ${destination}\n` +[m
+[32m+[m[32m                        `Requested at: ${requestTimestampISO}\nStatus: PENDING`;[m
+[32m+[m[32m                    const kb = { inline_keyboard: [[{ text: '✅ Mark Paid', callback_data: `WITHDRAW_CONFIRM_${requestId}` }]] };[m
+                     try {[m
+[31m-                        await bot.api.sendMessage(groupId, card, {[m
+[31m-                            parse_mode: "Markdown",[m
+[31m-                            reply_markup: kb[m
+[31m-                        });[m
+[32m+[m[32m                        await bot.api.sendMessage(groupId, truncateMessage(card), { parse_mode: 'Markdown', reply_markup: kb });[m
+                     }[m
+[31m-                    catch (error) {[m
+[31m-                        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error posting owner withdrawal request to group:`, error);[m
+[31m-                        // Fallback: post to private chat[m
+[31m-                        const fallbackText = `🧾 *Owner Withdrawal Request* (Group posting failed)\n\n` + card;[m
+[31m-                        await ctx.reply(fallbackText, { parse_mode: "Markdown", reply_markup: kb });[m
+[32m+[m[32m                    catch (e) {[m
+[32m+[m[32m                        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Owner payout notify failed:`, e);[m
+[32m+[m[32m                        await ctx.reply(card, { parse_mode: 'Markdown', reply_markup: kb });[m
+                     }[m
+                 }[m
+             }[m
+         }[m
+         catch (error) {[m
+             console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error creating withdrawal request:`, error);[m
+[31m-            await ctx.answerCallbackQuery({ text: "Error creating withdrawal request. Please try again.", show_alert: true });[m
+[32m+[m[32m            await ctx.answerCallbackQuery({ text: 'Error creating withdrawal request. Please try again.', show_alert: true });[m
+         }[m
+[31m-        ctx.session = {}; // Reset session[m
+[32m+[m[32m        ctx.session = {};[m
+     }[m
+     catch (error) {[m
+         console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Handle withdraw submit failed:`, error);[m
+[36m@@ -1088,12 +1130,19 @@[m [masync function handleWithdrawConfirm(ctx) {[m
+             return;[m
+         try {[m
+             // Update withdrawal status to PAID[m
+[31m-            await updateWithdrawalStatusById(requestId, 'PAID', `Marked as paid by ${ctx.from?.username ? '@' + ctx.from.username : ctx.from?.first_name || 'Admin'} (${fromId})`);[m
+[32m+[m[32m            await updateWithdrawalStatusById(requestId, 'PAID', `${fromId}`);[m
+             // Update the message to show confirmation[m
+             const verifier = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || "Admin"} (${fromId})`;[m
+             await ctx.editMessageText(`✅ Withdrawal marked as paid by ${verifier} at ${new Date().toISOString()}`, {[m
+                 reply_markup: { inline_keyboard: [] }[m
+             });[m
+[32m+[m[32m            // Also mark OwnerPayouts row as paid if this was a direct payout[m
+[32m+[m[32m            try {[m
+[32m+[m[32m                await markOwnerPayoutPaid(requestId, fromId, `Marked paid by ${verifier}`);[m
+[32m+[m[32m            }[m
+[32m+[m[32m            catch (e) {[m
+[32m+[m[32m                console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] markOwnerPayoutPaid failed:`, e);[m
+[32m+[m[32m            }[m
+             await ctx.answerCallbackQuery({ text: "Withdrawal marked as paid ✅" });[m
+         }[m
+         catch (error) {[m
+[36m@@ -1278,10 +1327,10 @@[m [masync function getAvailableMethods() {[m
+         const settings = await getSettings();[m
+         // Get circle methods from settings[m
+         const circleMethods = settings.METHODS_CIRCLE || METHODS_CIRCLE;[m
+[31m-        // Get owner methods from settings (owner payment addresses)[m
+[32m+[m[32m        // Build owner methods list from configured handles[m
+         const ownerMethods = [];[m
+         if (settings.APPLE_PAY_HANDLE)[m
+[31m-            ownerMethods.push('APPLEPAY');[m
+[32m+[m[32m            ownerMethods.push('APPLE PAY');[m
+         if (settings.CASHAPP_HANDLE)[m
+             ownerMethods.push('CASHAPP');[m
+         if (settings.PAYPAL_EMAIL)[m
+[36m@@ -1291,11 +1340,11 @@[m [masync function getAvailableMethods() {[m
+         if (settings.CRYPTO_WALLET_ETH)[m
+             ownerMethods.push('ETH');[m
+         if (settings.CRYPTO_WALLET) {[m
+[31m-            // Add other crypto networks[m
+[31m-            const networks = settings.CRYPTO_NETWORKS;[m
+[32m+[m[32m            const networks = settings.CRYPTO_NETWORKS || [];[m
+             for (const network of networks) {[m
+[31m-                if (network !== 'BTC' && network !== 'ETH') {[m
+[31m-                    ownerMethods.push(network);[m
+[32m+[m[32m                const upper = network.trim().toUpperCase();[m
+[32m+[m[32m                if (upper !== 'BTC' && upper !== 'ETH' && !ownerMethods.includes(upper)) {[m
+[32m+[m[32m                    ownerMethods.push(upper);[m
+                 }[m
+             }[m
+         }[m
+[1mdiff --git a/dist/sheets.js b/dist/sheets.js[m
+[1mindex e952eea..d621603 100644[m
+[1m--- a/dist/sheets.js[m
+[1m+++ b/dist/sheets.js[m
+[36m@@ -352,19 +352,20 @@[m [mexport async function appendWithdrawalOwner(row) {[m
+         // Also add to Owner Payouts sheet for tracking[m
+         await ensureSheetHeaders('OwnerPayouts');[m
+         const ownerPayoutRow = [[m
+[31m-            row.request_id,[m
+[31m-            String(row.user_id),[m
+[31m-            row.username,[m
+[31m-            String(row.amount_usd),[m
+[31m-            row.method,[m
+[31m-            row.payment_tag_or_address,[m
+[31m-            row.request_timestamp_iso,[m
+[32m+[m[32m            row.request_id, // payout_id[m
+[32m+[m[32m            String(row.user_id), // user_id[m
+[32m+[m[32m            row.username, // username[m
+[32m+[m[32m            String(row.amount_usd), // amount_usd[m
+[32m+[m[32m            row.method, // channel[m
+[32m+[m[32m            row.payment_tag_or_address, // owner_wallet_or_handle[m
+[32m+[m[32m            row.request_timestamp_iso, // request_timestamp_iso[m
+[32m+[m[32m            '', // paid_at_iso initially empty[m
+             'PENDING', // status[m
+[31m-            row.notes || ''[m
+[32m+[m[32m            row.notes || '' // notes[m
+         ];[m
+         await retryApiCall(() => svc.spreadsheets.values.append({[m
+             spreadsheetId: SHEET_ID,[m
+[31m-            range: 'OwnerPayouts!A:I',[m
+[32m+[m[32m            range: 'OwnerPayouts!A:J',[m
+             valueInputOption: 'USER_ENTERED',[m
+             requestBody: { values: [ownerPayoutRow] }[m
+         }));[m
+[36m@@ -395,10 +396,11 @@[m [mexport async function updateWithdrawalStatusById(requestId, newStatus, approvedB[m
+             throw new Error(`Withdrawal with request_id ${requestId} not found`);[m
+         }[m
+         // Update status and approval info[m
+[32m+[m[32m        // Correct column order: H = approved_by_user_id, I = approved_at_iso, J = status[m
+         const updates = [[m
+[31m-            { range: `Withdrawals!I${rowIndex}`, values: [[newStatus]] },[m
+[31m-            { range: `Withdrawals!G${rowIndex}`, values: [[approvedByUserId || '']] },[m
+[31m-            { range: `Withdrawals!H${rowIndex}`, values: [[new Date().toISOString()]] }[m
+[32m+[m[32m            { range: `Withdrawals!H${rowIndex}`, values: [[approvedByUserId || '']] },[m
+[32m+[m[32m            { range: `Withdrawals!I${rowIndex}`, values: [[new Date().toISOString()]] },[m
+[32m+[m[32m            { range: `Withdrawals!J${rowIndex}`, values: [[newStatus]] }[m
+         ];[m
+         await retryApiCall(() => svc.spreadsheets.values.batchUpdate({[m
+             spreadsheetId: SHEET_ID,[m
+[36m@@ -485,9 +487,18 @@[m [masync function ensureSheetHeaders(sheetName) {[m
+                 ];[m
+                 break;[m
+             case 'OwnerPayouts':[m
+[32m+[m[32m                // Align headers with appendOwnerPayout (10 columns)[m
+                 headers = [[m
+[31m-                    'request_id', 'user_id', 'username', 'amount_usd', 'method',[m
+[31m-                    'payment_tag_or_address', 'request_timestamp_iso', 'status', 'notes'[m
+[32m+[m[32m                    'payout_id', // A[m
+[32m+[m[32m                    'user_id', // B[m
+[32m+[m[32m                    'username', // C[m
+[32m+[m[32m                    'amount_usd', // D[m
+[32m+[m[32m                    'channel', // E  (e.g., PAYPAL/BTC/ETH)[m
+[32m+[m[32m                    'owner_wallet_or_handle', // F  (club's payout wallet/handle if any)[m
+[32m+[m[32m                    'request_timestamp_iso', // G[m
+[32m+[m[32m                    'paid_at_iso', // H[m
+[32m+[m[32m                    'status', // I[m
+[32m+[m[32m                    'notes' // J[m
+                 ];[m
+                 break;[m
+             case 'ExternalDeposits':[m
+[36m@@ -627,19 +638,20 @@[m [mexport async function markOwnerPayoutPaid(payoutId, markedByUserId, note) {[m
+         if (rowIndex === -1) {[m
+             throw new Error(`Owner payout ${payoutId} not found`);[m
+         }[m
+[31m-        // Update status to PAID[m
+[31m-        await retryApiCall(() => svc.spreadsheets.values.update({[m
+[31m-            spreadsheetId: SHEET_ID,[m
+[31m-            range: `OwnerPayouts!H${rowIndex}`,[m
+[31m-            valueInputOption: 'USER_ENTERED',[m
+[31m-            requestBody: { values: [['PAID']] }[m
+[31m-        }));[m
+[31m-        // Update notes[m
+[31m-        await retryApiCall(() => svc.spreadsheets.values.update({[m
+[32m+[m[32m        // Columns:[m
+[32m+[m[32m        // A payout_id, B user_id, C username, D amount_usd, E channel,[m
+[32m+[m[32m        // F owner_wallet_or_handle, G request_timestamp_iso, H paid_at_iso,[m
+[32m+[m[32m        // I status, J notes[m
+[32m+[m[32m        await retryApiCall(() => svc.spreadsheets.values.batchUpdate({[m
+             spreadsheetId: SHEET_ID,[m
+[31m-            range: `OwnerPayouts!I${rowIndex}`,[m
+[31m-            valueInputOption: 'USER_ENTERED',[m
+[31m-            requestBody: { values: [[note]] }[m
+[32m+[m[32m            requestBody: {[m
+[32m+[m[32m                valueInputOption: 'USER_ENTERED',[m
+[32m+[m[32m                data: [[m
+[32m+[m[32m                    { range: `OwnerPayouts!H${rowIndex}`, values: [[new Date().toISOString()]] }, // paid_at_iso[m
+[32m+[m[32m                    { range: `OwnerPayouts!I${rowIndex}`, values: [['PAID']] }, // status[m
+[32m+[m[32m                    { range: `OwnerPayouts!J${rowIndex}`, values: [[note || `Marked by ${markedByUserId}`]] } // notes[m
+[32m+[m[32m                ][m
+[32m+[m[32m            }[m
+         }));[m
+         console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Marked owner payout as paid: ${payoutId}`);[m
+     }[m
+[1mdiff --git a/src/index.ts b/src/index.ts[m
+[1mindex b1e742f..ae2e8db 100644[m
+[1m--- a/src/index.ts[m
+[1m+++ b/src/index.ts[m
+[36m@@ -1235,6 +1235,7 @@[m [masync function handleWithdrawSubmit(ctx: MyContext) {[m
+             await ctx.reply(card, { parse_mode: 'Markdown', reply_markup: kb });[m
+           }[m
+         }[m
+[32m+[m[32m      }[m
+     } catch (error) {[m
+       console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error creating withdrawal request:`, error);[m
+       await ctx.answerCallbackQuery({ text: 'Error creating withdrawal request. Please try again.', show_alert: true });[m

@@ -41,7 +41,11 @@ import {
   updateWithdrawalStatusById,
   appendExternalDeposit,
   markOwnerPayoutPaid,
-  markStaleCashAppCircleWithdrawals
+  markStaleCashAppCircleWithdrawals,
+  appendWithdrawalRequest,
+  setWithdrawalStatus,
+  requeueExpiredMatched,
+  appendDeposit
 } from "./sheets.js";
 import { findMatch } from "./matcher.js";
 import { Transaction, GroupSession } from "./types.js";
@@ -65,6 +69,24 @@ type SessionData = {
 interface MyContext extends Context {
   session: SessionData;
 }
+
+// ----- LOADER AUTH & GROUP --------------------------------------------------
+const AUTHORIZED_LOADER_IDS: Set<number> = (() => {
+  const raw = process.env.LOADER_IDS || process.env.LOADER_ID || '';
+  return new Set(raw.split(',').map(s=>Number(String(s).trim())).filter(n=>Number.isFinite(n)));
+})();
+function isAuthorizedLoader(uid?: number){ return process.env.SKIP_ENFORCEMENT==='true' ? true : !!uid && AUTHORIZED_LOADER_IDS.has(uid); }
+function parseGroupIdFromEnv(){
+  const raw = process.env.LOADER_GROUP_ID || '';
+  const parts = raw.split(',').map(s=>s.trim()).filter(Boolean);
+  for (const p of parts){ const n = Number(p); if (Number.isFinite(n)) return n; } return NaN;
+}
+const LOADER_GROUP_ID = parseGroupIdFromEnv();
+
+// ----- CONTACT FALLBACK -----------------------------------------------------
+const CONTACT_OWNER = process.env.OWNER_HANDLE || '@owner';
+const CONTACT_LOADERS = process.env.LOADER_HANDLES || '@loader1';
+const MSG_FALLBACK = `If anything goes wrong, message ${CONTACT_OWNER} or ${CONTACT_LOADERS} with a short description.`;
 
 function initial(): SessionData {
   return { lastActivity: Date.now() };
@@ -567,6 +589,21 @@ bot.callbackQuery("AMT_CUSTOM", async (ctx: MyContext) => {
   }
 });
 
+// Resolve pay-to handle for CIRCLE methods
+async function resolvePayToHandle(method: string): Promise<string> {
+  const settings = await getCachedSettings();
+  const upper = method.toUpperCase();
+  const map: Record<string, string|undefined> = {
+    VENMO: settings?.VENMO_HANDLE || FIXED_WALLETS.VENMO,
+    ZELLE: settings?.ZELLE_HANDLE || FIXED_WALLETS.ZELLE,
+    CASHAPP: settings?.CASHAPP_HANDLE || FIXED_WALLETS.CASHAPP,
+    APPLE_PAY: settings?.APPLEPAY_HANDLE || FIXED_WALLETS.APPLE_PAY,
+    CARD: settings?.CARD_HANDLE || FIXED_WALLETS.CARD,
+  };
+  const handle = map[upper];
+  return handle && handle.trim() ? handle : '<ask owner for handle>';
+}
+
 // Withdrawal button handler
 bot.callbackQuery("WITHDRAW", async (ctx: MyContext) => {
   try {
@@ -578,8 +615,8 @@ bot.callbackQuery("WITHDRAW", async (ctx: MyContext) => {
   }
 });
 
-// Circle withdrawal channels (include CASHAPP too)
-bot.callbackQuery(/^WD_CH_(VENMO|ZELLE|CASHAPP)$/, async (ctx: MyContext) => {
+// Circle withdrawal channels
+bot.callbackQuery(/^WD_CH_(VENMO|ZELLE|CASHAPP|APPLE_PAY|CARD)$/, async (ctx: MyContext) => {
   try {
     await ctx.answerCallbackQuery().catch(() => {});
     const method = ctx.match?.[1];
@@ -703,17 +740,160 @@ bot.callbackQuery(/WITHDRAW_METHOD_(.+)/, async (ctx: MyContext) => {
   }
 });
 
-// Withdrawal submit
+// Submit withdrawal → send to loaders (do not write to sheet yet)
 bot.callbackQuery("WITHDRAW_SUBMIT", async (ctx: MyContext) => {
   try {
-    await handleWithdrawSubmit(ctx);
+    await ctx.answerCallbackQuery().catch(()=>{});
+    if (!ctx.from) return;
+    const { payoutType, channel, method, amount, tag, cryptoAddress } = ctx.session;
+    const requestTimestampISO = ctx.session.requestTimestampISO || new Date().toISOString();
+    if (!method || !amount) {
+      await ctx.answerCallbackQuery({ text: "Missing withdrawal information. Please start over with /withdraw", show_alert: true });
+      return;
+    }
+    const dest = payoutType === 'CIRCLE'
+      ? tag
+      : (channel === 'CRYPTO' ? cryptoAddress : tag);
+    if (!dest) {
+      await ctx.answerCallbackQuery({ text: "Destination missing. Please try again.", show_alert: true });
+      return;
+    }
+    const requestId = `wd_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const username = ctx.from.username ? `@${ctx.from.username}` : `${ctx.from.first_name || ""} ${ctx.from.last_name || ""}`.trim();
+
+    // Post to loader group for approval
+    const text = [
+      '*Withdrawal Request*',
+      `ID: ${requestId}`,
+      `Player: ${username} (${ctx.from.id})`,
+      `Amount: $${amount.toFixed(2)}`,
+      `Method: ${method}`,
+      `Destination: ${dest}`,
+      `Type: ${payoutType}`,
+      `Requested: ${requestTimestampISO}`,
+    ].join('\\n');
+    const kb = new InlineKeyboard()
+      .text('✅ Approve', `APPROVE_WD:${requestId}:${ctx.from.id}:${Math.round(amount*100)}:${method}:${payoutType}`)
+      .text('❌ Reject', `REJECT_WD:${requestId}`);
+    if (Number.isFinite(LOADER_GROUP_ID)) {
+      await bot.api.sendMessage(LOADER_GROUP_ID, text, { parse_mode: 'Markdown', reply_markup: kb });
+    } else {
+      console.error('LOADER_GROUP_ID missing/invalid; cannot notify loaders');
+    }
+    await ctx.reply('Submitted to loaders. You\'ll be queued after approval.\n' + MSG_FALLBACK);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Withdraw submit failed:`, error);
     await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
   }
 });
 
-// Withdrawal confirmation (loader only)
+// Loader approves → write QUEUED row to Withdrawals; also offer Match/Mark Paid
+bot.callbackQuery(/^APPROVE_WD:(.+):(\d+):(\d+):([^:]+):(CIRCLE|OWNER)$/, async (ctx: MyContext) => {
+  try {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const fromId = ctx.from?.id;
+    if (!isAuthorizedLoader(fromId)) {
+      await ctx.answerCallbackQuery({ text: "You are not authorized to approve.", show_alert: true });
+      return;
+    }
+    const [_, requestId, userIdStr, amountCentsStr, method, payoutType] = ctx.match as any;
+    const amount = Number(amountCentsStr)/100;
+    const messageText = (ctx.callbackQuery?.message as any)?.text || (ctx.callbackQuery?.message as any)?.caption || '';
+    const destMatch = messageText.match(/Destination:\s*(.+)/);
+    const destination = destMatch ? destMatch[1] : '';
+    const usernameMatch = messageText.match(/Player:\s*([^\n]+)/);
+    const username = usernameMatch ? usernameMatch[1] : '';
+
+    await appendWithdrawalRequest({
+      request_id: requestId,
+      user_id: userIdStr,
+      username,
+      amount_usd: amount,
+      method,
+      payment_tag_or_address: destination,
+      request_timestamp_iso: new Date().toISOString(),
+      status: 'QUEUED',
+      payout_type: payoutType as any,
+      notes: `approved_by:${fromId}`
+    });
+
+    // Edit loader message → add Match / Mark Paid buttons
+    const kb = new InlineKeyboard()
+      .text('🤝 Match (30m)', `MATCH_WD:${requestId}`)
+      .text('✅ Mark Paid', `PAID_WD:${requestId}`);
+    const text = (ctx.callbackQuery?.message as any)?.text || '';
+    await ctx.editMessageText(text + '\n\nApproved and queued.', { reply_markup: kb });
+  } catch (e) {
+    console.error('APPROVE_WD failed', e);
+    await ctx.answerCallbackQuery({ text: "Approval failed.", show_alert: true });
+  }
+});
+
+bot.callbackQuery(/^REJECT_WD:(.+)$/, async (ctx: MyContext) => {
+  try {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const fromId = ctx.from?.id;
+    if (!isAuthorizedLoader(fromId)) {
+      await ctx.answerCallbackQuery({ text: "Not authorized.", show_alert: true });
+      return;
+    }
+    const requestId = ctx.match?.[1];
+    const text = (ctx.callbackQuery?.message as any)?.text || '';
+    await ctx.editMessageText(text + '\n\nRejected.');
+  } catch {}
+});
+
+// Loader matches → set MATCHED and due_at_iso = now+30min
+bot.callbackQuery(/^MATCH_WD:(.+)$/, async (ctx: MyContext) => {
+  try {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const fromId = ctx.from?.id;
+    if (!isAuthorizedLoader(fromId)) {
+      await ctx.answerCallbackQuery({ text: "Not authorized.", show_alert: true });
+      return;
+    }
+    const requestId = ctx.match?.[1];
+    const due = new Date(Date.now()+30*60*1000).toISOString();
+    await setWithdrawalStatus(requestId!, 'MATCHED', { matchedDueAtISO: due, notesAppend: `matched_by:${fromId}` });
+    const text = (ctx.callbackQuery?.message as any)?.text || '';
+    const kb = new InlineKeyboard().text('✅ Mark Paid', `PAID_WD:${requestId}`);
+    await ctx.editMessageText(text + `\n\nMatched. Due by ${due}`, { reply_markup: kb });
+  } catch (e) {
+    console.error('MATCH_WD failed', e);
+  }
+});
+
+// Loader marks paid → set PAID and remove buttons
+bot.callbackQuery(/^PAID_WD:(.+)$/, async (ctx: MyContext) => {
+  try {
+    await ctx.answerCallbackQuery().catch(()=>{});
+    const fromId = ctx.from?.id;
+    if (!isAuthorizedLoader(fromId)) {
+      await ctx.answerCallbackQuery({ text: "Not authorized.", show_alert: true });
+      return;
+    }
+    const requestId = ctx.match?.[1];
+    await setWithdrawalStatus(requestId!, 'PAID', { notesAppend: `paid_by:${fromId}` });
+    const text = (ctx.callbackQuery?.message as any)?.text || '';
+    await ctx.editMessageText(text + '\n\n✅ Paid', { reply_markup: undefined });
+  } catch (e) {
+    console.error('PAID_WD failed', e);
+  }
+});
+
+// Manual requeue for expired MATCHED (e.g., via command)
+bot.command('requeue_expired', async (ctx: MyContext) => {
+  try {
+    const fromId = ctx.from?.id;
+    if (!isAuthorizedLoader(fromId)) return;
+    const n = await requeueExpiredMatched();
+    await ctx.reply(`Requeued ${n} expired withdrawals.`);
+  } catch (e) {
+    await ctx.reply('Requeue failed.');
+  }
+});
+
+// Withdrawal confirmation (loader only) - legacy
 bot.callbackQuery(/WITHDRAW_CONFIRM_(.+)/, async (ctx: MyContext) => {
   try {
     await handleWithdrawConfirm(ctx);
@@ -1082,14 +1262,19 @@ if (PRIVACY_HINTS_ENABLED) {
 async function startWithdrawFlow(ctx: MyContext) {
   try {
     if (!ctx.from) return;
-
     ctx.session = {}; // Reset session
-    // Present a clear, stable set of withdraw methods
     const kb = new InlineKeyboard()
       .text('Venmo', 'WD_CH_VENMO').text('Zelle', 'WD_CH_ZELLE').row()
-      .text('CashApp', 'WD_CH_CASHAPP').row()
-      .text('PayPal', 'WD_CH_PAYPAL').text('Crypto', 'WD_CH_CRYPTO');
-    await ctx.editMessageText(MSG.withdrawWelcome, { reply_markup: kb });
+      .text('CashApp', 'WD_CH_CASHAPP');
+    // Conditionally add Card / Apple Pay
+    const s = await getCachedSettings().catch(()=>null);
+    const wantCard = !!(s?.METHODS_CIRCLE?.includes('CARD') || FIXED_WALLETS.CARD);
+    const wantApple = !!(s?.METHODS_CIRCLE?.includes('APPLE_PAY') || FIXED_WALLETS.APPLE_PAY);
+    if (wantApple || wantCard) kb.row();
+    if (wantApple) kb.text('Apple Pay', 'WD_CH_APPLE_PAY');
+    if (wantCard) kb.text('Card', 'WD_CH_CARD');
+    kb.row().text('PayPal', 'WD_CH_PAYPAL').text('Crypto', 'WD_CH_CRYPTO');
+    await ctx.editMessageText(MSG.withdrawWelcome + `\n\n${MSG_FALLBACK}`, { reply_markup: kb });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Start withdraw flow failed:`, error);
     throw error;
@@ -1136,10 +1321,9 @@ async function showWithdrawSummary(ctx: MyContext) {
     }
 
     const summary = truncateMessage(
-      `Review your withdrawal:\n• Method: ${method}\n• Amount: $${amount.toFixed(2)}\n• Destination: ${destination}\n\nTap "Submit Withdrawal" to send this to loaders.`
+      `Review your withdrawal:\n• Method: ${method}\n• Amount: $${amount.toFixed(2)}\n• Destination: ${destination}\n\nTap "Submit Withdrawal" to send to loaders for approval.\n\n${MSG_FALLBACK}`
     );
     const kb = new InlineKeyboard().text("Submit Withdrawal", "WITHDRAW_SUBMIT");
-
     await ctx.reply(summary, { reply_markup: kb });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Show withdraw summary failed:`, error);
@@ -1294,6 +1478,68 @@ async function handleWithdrawConfirm(ctx: MyContext) {
 function generateWithdrawId(): string {
   return `wd_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
 }
+
+// Deposit Transaction Card and Mark Paid
+async function showBuyinTransactionCard(ctx: MyContext) {
+  const { method, amount } = ctx.session;
+  const payTo = await resolvePayToHandle(method);
+  const depositId = `dep_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+  const username = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || ""} ${ctx.from?.last_name || ""}`.trim();
+  const msg = [
+    '*Transaction Card*',
+    '',
+    '*Transaction*',
+    `Player: ${username}`,
+    `Amount: ${amount} USD`,
+    `Method: ${method}`,
+    `Pay to: ${payTo}`,
+  ].join('\n');
+  // keep callback payload compact: include uid, amount cents, method
+  const cents = Math.round(Number(amount)*100);
+  const kb = new InlineKeyboard().text('✅ Mark Paid', `MARKPAID_DEP:${depositId}:${ctx.from!.id}:${cents}:${method}`);
+  await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: kb });
+}
+
+// Authorized loaders mark deposit paid → log to Deposits
+bot.callbackQuery(/^MARKPAID_DEP:([^:]+):(\d+):(\d+):([^:]+)$/, async (ctx: MyContext) => {
+  try {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const fromId = ctx.from?.id;
+    if (!isAuthorizedLoader(fromId)) {
+      await ctx.answerCallbackQuery({ text: "You are not authorized to mark this as paid.", show_alert: true });
+      return;
+    }
+    const [_, depId, userIdStr, amountCentsStr, method] = ctx.match as any;
+    const amount = Number(amountCentsStr)/100;
+    const messageText = (ctx.callbackQuery?.message as any)?.text || (ctx.callbackQuery?.message as any)?.caption || '';
+    const userMatch = messageText.match(/Player:\s*([^\n]+)/);
+    const username = userMatch ? userMatch[1] : '';
+    const payToMatch = messageText.match(/Pay to:\s*([^\n]+)/);
+    const payTo = payToMatch ? payToMatch[1] : await resolvePayToHandle(method);
+
+    // Append as PAID at time of confirmation
+    await appendDeposit({
+      deposit_id: depId,
+      user_id: userIdStr,
+      username,
+      amount_usd: amount,
+      method: method as any,
+      pay_to_handle: payTo,
+      created_at_iso: new Date().toISOString(),
+      status: 'PAID',
+      notes: `Marked by ${fromId}`
+    }).catch(()=>{});
+
+    // Edit the message to reflect success and remove the button
+    try {
+      const text = (ctx.callbackQuery?.message as any)?.text || (ctx.callbackQuery?.message as any)?.caption || '';
+      await ctx.editMessageText(text + "\n\n✅ Paid", { reply_markup: undefined });
+    } catch {}
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] MARKPAID_DEP failed:`, error);
+    await ctx.answerCallbackQuery({ text: "Failed to mark as paid. Try again.", show_alert: true });
+  }
+});
 
 // External deposit logging
 bot.callbackQuery('EXTERNAL_DEPOSIT_LOG', async (ctx: MyContext) => {

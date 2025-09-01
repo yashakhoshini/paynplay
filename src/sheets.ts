@@ -23,6 +23,158 @@ import {
 } from './config.js';
 import { OwnerAccount, UserRole, Settings } from './types.js';
 
+// --- WITHDRAWALS lifecycle helpers -----------------------------------------
+export type WithdrawalStatus = 'QUEUED'|'MATCHED'|'PAID'|'CANCELLED'|'LOGGED';
+export type PayoutType = 'CIRCLE'|'OWNER';
+
+export async function appendWithdrawalRequest(row: {
+  request_id: string;
+  user_id: string|number;
+  username: string;
+  amount_usd: number;
+  method: string;
+  payment_tag_or_address: string;
+  request_timestamp_iso: string;
+  status: WithdrawalStatus;     // typically QUEUED at approval
+  payout_type: PayoutType;
+  notes?: string;
+}): Promise<void> {
+  const svc = await getSheetsClient();
+  // Ensure 12-column header exists (A-L). We also support optional M,N for matching window/owner fulfill.
+  await ensureSheetHeaders('Withdrawals');
+  const values = [[
+    row.request_id,                             // A
+    String(row.user_id),                        // B
+    row.username,                               // C
+    String(row.amount_usd),                     // D
+    row.method,                                 // E
+    row.payment_tag_or_address,                 // F
+    row.request_timestamp_iso,                  // G
+    '',                                         // H approved_by_user_id
+    '',                                         // I approved_at_iso
+    row.status,                                 // J status
+    row.payout_type,                            // K payout_type
+    row.notes || ''                             // L notes
+  ]];
+  await retryApiCall(() => svc.spreadsheets.values.append({
+    spreadsheetId: SHEET_ID,
+    range: 'Withdrawals!A:L',
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values }
+  }));
+}
+
+export async function setWithdrawalStatus(requestId: string, status: WithdrawalStatus, extra?: {
+  matchedDueAtISO?: string;
+  approvedByUserId?: string;
+  ownerManualPaidBy?: string;
+  ownerManualPaidAtISO?: string;
+  notesAppend?: string;
+}): Promise<void> {
+  const svc = await getSheetsClient();
+  const res = await retryApiCall(() => svc.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: 'Withdrawals!A:O' // allow up to O for extra fields
+  }));
+  const rows = res.data.values || [];
+  let rowIndex = -1;
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][0] === requestId) { rowIndex = i + 1; break; }
+  }
+  if (rowIndex === -1) throw new Error(`Withdrawal ${requestId} not found`);
+  const updates: any[] = [
+    { range: `Withdrawals!J${rowIndex}`, values: [[status]] }
+  ];
+  if (extra?.approvedByUserId) {
+    updates.push({ range: `Withdrawals!H${rowIndex}`, values: [[extra.approvedByUserId]] });
+    updates.push({ range: `Withdrawals!I${rowIndex}`, values: [[new Date().toISOString()]] });
+  }
+  if (extra?.matchedDueAtISO) {
+    // Use column M for due_at_iso (optional extra column)
+    updates.push({ range: `Withdrawals!M${rowIndex}`, values: [[extra.matchedDueAtISO]] });
+  }
+  if (extra?.ownerManualPaidBy) {
+    // Use columns N,O for owner manual fulfillment
+    updates.push({ range: `Withdrawals!N${rowIndex}`, values: [[extra.ownerManualPaidBy]] });
+    updates.push({ range: `Withdrawals!O${rowIndex}`, values: [[extra.ownerManualPaidAtISO || new Date().toISOString()]] });
+  }
+  if (extra?.notesAppend) {
+    const oldNotes = (rows[rowIndex-1][11] || '');
+    const newNotes = oldNotes ? `${oldNotes} | ${extra.notesAppend}` : extra.notesAppend;
+    updates.push({ range: `Withdrawals!L${rowIndex}`, values: [[newNotes]] });
+  }
+  await retryApiCall(() => svc.spreadsheets.values.batchUpdate({
+    spreadsheetId: SHEET_ID,
+    requestBody: { valueInputOption: 'USER_ENTERED', data: updates }
+  }));
+}
+
+export async function requeueExpiredMatched(nowISO?: string): Promise<number> {
+  const svc = await getSheetsClient();
+  const res = await retryApiCall(() => svc.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: 'Withdrawals!A:O'
+  }));
+  const rows = res.data.values || [];
+  const now = nowISO ? Date.parse(nowISO) : Date.now();
+  const updates: any[] = [];
+  let count = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const status = r[9];
+    const dueAt = r[12]; // column M (0-based index 12)
+    if (status === 'MATCHED' && dueAt && Date.parse(dueAt) < now) {
+      const rowIndex = i + 1;
+      count++;
+      updates.push({ range: `Withdrawals!J${rowIndex}`, values: [['QUEUED']] });
+      updates.push({ range: `Withdrawals!M${rowIndex}`, values: [['']] });
+      const oldNotes = r[11] || '';
+      const newNotes = oldNotes ? `${oldNotes} | auto-requeue` : 'auto-requeue';
+      updates.push({ range: `Withdrawals!L${rowIndex}`, values: [[newNotes]] });
+    }
+  }
+  if (updates.length) {
+    await retryApiCall(() => svc.spreadsheets.values.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: { valueInputOption: 'USER_ENTERED', data: updates }
+    }));
+  }
+  return count;
+}
+
+// --- DEPOSITS --------------------------------------------------------------
+export async function appendDeposit(row: {
+  deposit_id: string;
+  user_id: string|number;
+  username: string;
+  amount_usd: number;
+  method: string;
+  pay_to_handle: string;
+  created_at_iso: string;
+  status: 'PENDING'|'PAID'|'CANCELLED';
+  notes?: string;
+}): Promise<void> {
+  const svc = await getSheetsClient();
+  await ensureSheetHeaders('Deposits');
+  const values = [[
+    row.deposit_id,
+    String(row.user_id),
+    row.username,
+    String(row.amount_usd),
+    row.method,
+    row.pay_to_handle,
+    row.created_at_iso,
+    row.status,
+    row.notes || ''
+  ]];
+  await retryApiCall(() => svc.spreadsheets.values.append({
+    spreadsheetId: SHEET_ID,
+    range: 'Deposits!A:I',
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values }
+  }));
+}
+
 type Sheets = sheets_v4.Sheets;
 
 // Singleton Google Sheets client
