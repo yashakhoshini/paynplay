@@ -5,7 +5,6 @@ import {
   BOT_TOKEN, 
   BASE_URL, 
   PORT,
-  LOADER_GROUP_ID,
   BOT_USERNAME,
   PRIVACY_HINTS_ENABLED,
   ALLOWED_USER_IDS,
@@ -1482,6 +1481,10 @@ function generateWithdrawId(): string {
 // Deposit Transaction Card and Mark Paid
 async function showBuyinTransactionCard(ctx: MyContext) {
   const { method, amount } = ctx.session;
+  if (!method) {
+    await ctx.reply("Error: No payment method selected. Please try again.");
+    return;
+  }
   const payTo = await resolvePayToHandle(method);
   const depositId = `dep_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
   const username = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || ""} ${ctx.from?.last_name || ""}`.trim();
