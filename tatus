@@ -1,2 +1,64 @@
-dist/index.js
-src/index.ts
+[1mdiff --git a/proper-patch.diff b/proper-patch.diff[m
+[1mdeleted file mode 100644[m
+[1mindex e69de29..0000000[m
+[1mdiff --git a/src/sheets.ts b/src/sheets.ts[m
+[1mindex 68dec4d..34c0673 100644[m
+[1m--- a/src/sheets.ts[m
+[1m+++ b/src/sheets.ts[m
+[36m@@ -454,16 +454,16 @@[m [mexport async function appendWithdrawalOwner(row: {[m
+     await ensureSheetHeaders('OwnerPayouts');[m
+     [m
+     const ownerPayoutRow = [[m
+[31m-      row.request_id,[m
+[31m-      String(row.user_id),[m
+[31m-      row.username,[m
+[31m-      String(row.amount_usd),[m
+[31m-      row.method,[m
+[31m-      row.payment_tag_or_address,[m
+[31m-      row.request_timestamp_iso,[m
+[31m-      '',        // paid_at_iso initially empty[m
+[31m-      'PENDING', // status[m
+[31m-      row.notes || ''[m
+[32m+[m[32m      row.request_id,                // payout_id[m
+[32m+[m[32m      String(row.user_id),           // user_id[m
+[32m+[m[32m      row.username,                  // username[m
+[32m+[m[32m      String(row.amount_usd),        // amount_usd[m
+[32m+[m[32m      row.method,                    // channel[m
+[32m+[m[32m      row.payment_tag_or_address,    // owner_wallet_or_handle[m
+[32m+[m[32m      row.request_timestamp_iso,     // request_timestamp_iso[m
+[32m+[m[32m      '',                            // paid_at_iso initially empty[m
+[32m+[m[32m      'PENDING',                     // status[m
+[32m+[m[32m      row.notes || ''                // notes[m
+     ];[m
+ [m
+     await retryApiCall(() => svc.spreadsheets.values.append({[m
+[36m@@ -618,18 +618,18 @@[m [masync function ensureSheetHeaders(sheetName: string): Promise<void> {[m
+         ];[m
+         break;[m
+       case 'OwnerPayouts':[m
+[31m-        // Standardize OwnerPayouts headers to include paid_at_iso and status[m
+[32m+[m[32m        // Align headers with appendOwnerPayout (10 columns)[m
+         headers = [[m
+[31m-          'request_id',[m
+[31m-          'user_id',[m
+[31m-          'username',[m
+[31m-          'amount_usd',[m
+[31m-          'method',[m
+[31m-          'payment_tag_or_address',[m
+[31m-          'request_timestamp_iso',[m
+[31m-          'paid_at_iso',[m
+[31m-          'status',[m
+[31m-          'notes'[m
+[32m+[m[32m          'payout_id',               // A[m
+[32m+[m[32m          'user_id',                 // B[m
+[32m+[m[32m          'username',                // C[m
+[32m+[m[32m          'amount_usd',              // D[m
+[32m+[m[32m          'channel',                 // E  (e.g., PAYPAL/BTC/ETH)[m
+[32m+[m[32m          'owner_wallet_or_handle',  // F  (club's payout wallet/handle if any)[m
+[32m+[m[32m          'request_timestamp_iso',   // G[m
+[32m+[m[32m          'paid_at_iso',             // H[m
+[32m+[m[32m          'status',                  // I[m
+[32m+[m[32m          'notes'                    // J[m
+         ];[m
+         break;[m
+       case 'ExternalDeposits':[m

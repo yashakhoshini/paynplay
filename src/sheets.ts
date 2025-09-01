@@ -454,16 +454,16 @@ export async function appendWithdrawalOwner(row: {
     await ensureSheetHeaders('OwnerPayouts');
     
     const ownerPayoutRow = [
-      row.request_id,
-      String(row.user_id),
-      row.username,
-      String(row.amount_usd),
-      row.method,
-      row.payment_tag_or_address,
-      row.request_timestamp_iso,
-      '',        // paid_at_iso initially empty
-      'PENDING', // status
-      row.notes || ''
+      row.request_id,                // payout_id
+      String(row.user_id),           // user_id
+      row.username,                  // username
+      String(row.amount_usd),        // amount_usd
+      row.method,                    // channel
+      row.payment_tag_or_address,    // owner_wallet_or_handle
+      row.request_timestamp_iso,     // request_timestamp_iso
+      '',                            // paid_at_iso initially empty
+      'PENDING',                     // status
+      row.notes || ''                // notes
     ];
 
     await retryApiCall(() => svc.spreadsheets.values.append({
@@ -618,18 +618,18 @@ async function ensureSheetHeaders(sheetName: string): Promise<void> {
         ];
         break;
       case 'OwnerPayouts':
-        // Standardize OwnerPayouts headers to include paid_at_iso and status
+        // Align headers with appendOwnerPayout (10 columns)
         headers = [
-          'request_id',
-          'user_id',
-          'username',
-          'amount_usd',
-          'method',
-          'payment_tag_or_address',
-          'request_timestamp_iso',
-          'paid_at_iso',
-          'status',
-          'notes'
+          'payout_id',               // A
+          'user_id',                 // B
+          'username',                // C
+          'amount_usd',              // D
+          'channel',                 // E  (e.g., PAYPAL/BTC/ETH)
+          'owner_wallet_or_handle',  // F  (club's payout wallet/handle if any)
+          'request_timestamp_iso',   // G
+          'paid_at_iso',             // H
+          'status',                  // I
+          'notes'                    // J
         ];
         break;
       case 'ExternalDeposits':
@@ -794,24 +794,20 @@ export async function markOwnerPayoutPaid(payoutId: string, markedByUserId: numb
       throw new Error(`Owner payout ${payoutId} not found`);
     }
     
-    // Columns: H = paid_at_iso, I = status, J = notes
-    await retryApiCall(() => svc.spreadsheets.values.update({
+    // Columns:
+    // A payout_id, B user_id, C username, D amount_usd, E channel,
+    // F owner_wallet_or_handle, G request_timestamp_iso, H paid_at_iso,
+    // I status, J notes
+    await retryApiCall(() => svc.spreadsheets.values.batchUpdate({
       spreadsheetId: SHEET_ID,
-      range: `OwnerPayouts!H${rowIndex}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [[new Date().toISOString()]] }
-    }));
-    await retryApiCall(() => svc.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
-      range: `OwnerPayouts!I${rowIndex}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [['PAID']] }
-    }));
-    await retryApiCall(() => svc.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
-      range: `OwnerPayouts!J${rowIndex}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [[note]] }
+      requestBody: {
+        valueInputOption: 'USER_ENTERED',
+        data: [
+          { range: `OwnerPayouts!H${rowIndex}`, values: [[new Date().toISOString()]] }, // paid_at_iso
+          { range: `OwnerPayouts!I${rowIndex}`, values: [['PAID']] },                   // status
+          { range: `OwnerPayouts!J${rowIndex}`, values: [[note || `Marked by ${markedByUserId}`]] } // notes
+        ]
+      }
     }));
     
     console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Marked owner payout as paid: ${payoutId}`);
