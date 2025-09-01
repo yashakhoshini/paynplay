@@ -1235,6 +1235,7 @@ async function handleWithdrawSubmit(ctx: MyContext) {
             await ctx.reply(card, { parse_mode: 'Markdown', reply_markup: kb });
           }
         }
+      }
     } catch (error) {
       console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Error creating withdrawal request:`, error);
       await ctx.answerCallbackQuery({ text: 'Error creating withdrawal request. Please try again.', show_alert: true });
