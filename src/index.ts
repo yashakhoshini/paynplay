@@ -940,7 +940,7 @@ bot.on("message:text", async (ctx: MyContext) => {
       const username = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || ""} ${ctx.from?.last_name || ""}`.trim();
       // Determine where this deposit should be sent based on outstanding withdrawals.
       const matchResult = await matchDepositToWithdrawal(amt, method, String(userId), username);
-      const payTo = matchResult.payTo || resolvePayToHandle(method);
+      const payTo = matchResult.payTo || await resolvePayToHandle(method);
       // Generate a deposit ID and cache details for callback
       const depositId = `dep_${Date.now()}_${Math.random().toString(36).substr(2,6)}`;
       pendingDeposits[depositId] = { amount: amt, method, userId, username };
@@ -1621,7 +1621,7 @@ bot.callbackQuery(/^MARKPAID_DEP:(.+)$/, async (ctx: MyContext) => {
         username,
         amount_usd: amount,
         method,
-        pay_to_handle: matchResult.payTo || resolvePayToHandle(method),
+        pay_to_handle: matchResult.payTo || await resolvePayToHandle(method),
         created_at_iso: new Date().toISOString(),
         status: 'PAID',
         notes: `Circle deposit confirmed by ${ctx.from?.username ? '@' + ctx.from.username : loaderId}`
