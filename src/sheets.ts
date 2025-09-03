@@ -1078,3 +1078,141 @@ export async function markStaleCashAppCircleWithdrawals(staleHours: number): Pro
 }
 
 // Legacy functions for backward compatibility
+
+// ---------------------------------------------------------
+// Helpers for deposit/withdrawal matching
+//
+// The club operates a "circle" payout system where buy‑ins can be
+// matched against outstanding withdrawal requests. When a player
+// deposits funds via a circle method (e.g. Zelle, Venmo, CashApp),
+// we first check if there are any open withdrawals using the same
+// method. If a deposit amount is less than or equal to the oldest
+// withdrawal amount, we allow the player to pay that withdrawal
+// request directly. The outstanding withdrawal is reduced by the
+// deposit amount (or closed entirely if fully paid). Deposits that
+// exceed any single withdrawal, or deposits made when no matching
+// withdrawal exists, are always directed to the club's house account.
+
+export interface OpenWithdrawal {
+  /** The request ID of the withdrawal */
+  request_id: string;
+  /** 1‑based index of the row in the Withdrawals sheet */
+  rowIndex: number;
+  /** Amount remaining on the withdrawal request (USD) */
+  amount: number;
+  /** Username of the withdrawing player */
+  username: string;
+  /** Telegram or internal user id of the withdrawing player */
+  user_id: string;
+  /** Payment method (ZELLE, VENMO, etc.) */
+  method: string;
+  /** Where to send funds for this withdrawal (tag, phone, handle) */
+  pay_to: string;
+  /** Full row contents */
+  row: string[];
+}
+
+/**
+ * Fetch all open withdrawals for a particular circle method.  A
+ * withdrawal is considered open if its status (column J) is
+ * "QUEUED" and its payout type (column K) is "CIRCLE".  Results are
+ * returned oldest‑first (lower row index first).
+ */
+export async function getOpenWithdrawalsByMethod(method: string): Promise<OpenWithdrawal[]> {
+  const svc = await getSheetsClient();
+  const res = await retryApiCall(() => svc.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: 'Withdrawals!A:O'
+  }));
+  const rows = res.data.values || [];
+  const open: OpenWithdrawal[] = [];
+  // Skip header (row 0); iterate over rows starting from row 1
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const status = (row[9] || '').toString().trim().toUpperCase();
+    const payoutType = (row[10] || '').toString().trim().toUpperCase();
+    const rowMethod = (row[4] || '').toString().trim().toUpperCase();
+    if (status === 'QUEUED' && payoutType === 'CIRCLE' && rowMethod === method.toUpperCase()) {
+      const amount = parseFloat(row[3]) || 0;
+      open.push({
+        request_id: row[0],
+        rowIndex: i + 1,
+        amount,
+        username: row[2] || '',
+        user_id: row[1] || '',
+        method: rowMethod,
+        pay_to: row[5] || '',
+        row
+      });
+    }
+  }
+  return open;
+}
+
+/**
+ * Reduce an open withdrawal by a deposit amount or close it entirely.
+ *
+ * @param requestId The request ID of the withdrawal being reduced.
+ * @param newAmount The new remaining amount after reduction.  If this is
+ *   zero, the withdrawal is considered paid in full and its status
+ *   is updated to PAID.
+ * @param approvedByUserId The Telegram or internal ID of the loader
+ *   approving the match.  This will be recorded in the approval column.
+ */
+async function reduceWithdrawalAmount(requestId: string, newAmount: number, approvedByUserId: string): Promise<void> {
+  if (newAmount > 0) {
+    // Only update the amount column (D) when the withdrawal remains open
+    const svc = await getSheetsClient();
+    await retryApiCall(() => svc.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID,
+      range: `Withdrawals!D${requestId}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [[String(newAmount)]] }
+    }));
+  } else {
+    // Fully paid: update status to PAID
+    await updateWithdrawalStatusById(requestId, 'PAID', approvedByUserId);
+  }
+}
+
+/**
+ * Match an incoming deposit to an open withdrawal if possible.  If no
+ * matching withdrawal exists or the deposit exceeds the outstanding
+ * amount, the deposit should be directed to the club's house account.
+ *
+ * This function will **modify** the matching withdrawal on the sheet
+ * (reducing its amount or marking it paid) when appropriate.
+ *
+ * @param amountUsd The deposit amount in dollars.
+ * @param method The deposit method (ZELLE, VENMO, etc.).
+ * @param depositUserId The ID of the player making the deposit (used
+ *   for approval tracking when a withdrawal is fully paid).
+ * @param depositUsername The username of the player making the deposit.
+ * @returns An object describing where the deposit should be sent.  If
+ *   matchedWithdrawal is present, send the funds to that player's
+ *   handle; otherwise the payTo field will be empty and callers
+ *   should look up the house handle separately.
+ */
+export async function matchDepositToWithdrawal(
+  amountUsd: number,
+  method: string,
+  depositUserId: string,
+  depositUsername: string
+): Promise<{ payTo: string; payAmount: number; matchedWithdrawal?: { requestId: string; newAmount: number } }> {
+  const open = await getOpenWithdrawalsByMethod(method);
+  if (open.length > 0) {
+    const w = open[0];
+    // Only match if the deposit does not exceed the outstanding withdrawal
+    if (amountUsd <= w.amount) {
+      const newAmount = parseFloat((w.amount - amountUsd).toFixed(2));
+      await reduceWithdrawalAmount(w.request_id, newAmount, depositUserId);
+      return {
+        payTo: w.pay_to,
+        payAmount: amountUsd,
+        matchedWithdrawal: { requestId: w.request_id, newAmount }
+      };
+    }
+  }
+  // Otherwise return empty payTo; caller must choose house handle
+  return { payTo: '', payAmount: amountUsd };
+}

@@ -1,0 +1,285 @@
+*** Begin Patch
+*** Update File: src/sheets.ts
+@@
+ export async function ensureSheetHeaders(sheetName: string): Promise<void> {
+@@
+ }
++
++// ---------------------------------------------------------
++// Helpers for deposit/withdrawal matching
++//
++// The club operates a "circle" payout system where buy‑ins can be
++// matched against outstanding withdrawal requests. When a player
++// deposits funds via a circle method (e.g. Zelle, Venmo, CashApp),
++// we first check if there are any open withdrawals using the same
++// method. If a deposit amount is less than or equal to the oldest
++// withdrawal amount, we allow the player to pay that withdrawal
++// request directly. The outstanding withdrawal is reduced by the
++// deposit amount (or closed entirely if fully paid). Deposits that
++// exceed any single withdrawal, or deposits made when no matching
++// withdrawal exists, are always directed to the club's house account.
++
++export interface OpenWithdrawal {
++  /** The request ID of the withdrawal */
++  request_id: string;
++  /** 1‑based index of the row in the Withdrawals sheet */
++  rowIndex: number;
++  /** Amount remaining on the withdrawal request (USD) */
++  amount: number;
++  /** Username of the withdrawing player */
++  username: string;
++  /** Telegram or internal user id of the withdrawing player */
++  user_id: string;
++  /** Payment method (ZELLE, VENMO, etc.) */
++  method: string;
++  /** Where to send funds for this withdrawal (tag, phone, handle) */
++  pay_to: string;
++  /** Full row contents */
++  row: string[];
++}
++
++/**
++ * Fetch all open withdrawals for a particular circle method.  A
++ * withdrawal is considered open if its status (column J) is
++ * "QUEUED" and its payout type (column K) is "CIRCLE".  Results are
++ * returned oldest‑first (lower row index first).
++ */
++export async function getOpenWithdrawalsByMethod(method: string): Promise<OpenWithdrawal[]> {
++  const svc = await getSheetsClient();
++  const res = await retryApiCall(() => svc.spreadsheets.values.get({
++    spreadsheetId: SHEET_ID,
++    range: 'Withdrawals!A:O'
++  }));
++  const rows = res.data.values || [];
++  const open: OpenWithdrawal[] = [];
++  // Skip header (row 0); iterate over rows starting from row 1
++  for (let i = 1; i < rows.length; i++) {
++    const row = rows[i];
++    const status = (row[9] || '').toString().trim().toUpperCase();
++    const payoutType = (row[10] || '').toString().trim().toUpperCase();
++    const rowMethod = (row[4] || '').toString().trim().toUpperCase();
++    if (status === 'QUEUED' && payoutType === 'CIRCLE' && rowMethod === method.toUpperCase()) {
++      const amount = parseFloat(row[3]) || 0;
++      open.push({
++        request_id: row[0],
++        rowIndex: i + 1,
++        amount,
++        username: row[2] || '',
++        user_id: row[1] || '',
++        method: rowMethod,
++        pay_to: row[5] || '',
++        row
++      });
++    }
++  }
++  return open;
++}
++
++/**
++ * Reduce an open withdrawal by a deposit amount or close it entirely.
++ *
++ * @param requestId The request ID of the withdrawal being reduced.
++ * @param newAmount The new remaining amount after reduction.  If this is
++ *   zero, the withdrawal is considered paid in full and its status
++ *   is updated to PAID.
++ * @param approvedByUserId The Telegram or internal ID of the loader
++ *   approving the match.  This will be recorded in the approval column.
++ */
++async function reduceWithdrawalAmount(requestId: string, newAmount: number, approvedByUserId: string): Promise<void> {
++  if (newAmount > 0) {
++    // Only update the amount column (D) when the withdrawal remains open
++    const svc = await getSheetsClient();
++    await retryApiCall(() => svc.spreadsheets.values.update({
++      spreadsheetId: SHEET_ID,
++      range: `Withdrawals!D${requestId}`,
++      valueInputOption: 'USER_ENTERED',
++      requestBody: { values: [[String(newAmount)]] }
++    }));
++  } else {
++    // Fully paid: update status to PAID
++    await updateWithdrawalStatusById(requestId, 'PAID', approvedByUserId);
++  }
++}
++
++/**
++ * Match an incoming deposit to an open withdrawal if possible.  If no
++ * matching withdrawal exists or the deposit exceeds the outstanding
++ * amount, the deposit should be directed to the club's house account.
++ *
++ * This function will **modify** the matching withdrawal on the sheet
++ * (reducing its amount or marking it paid) when appropriate.
++ *
++ * @param amountUsd The deposit amount in dollars.
++ * @param method The deposit method (ZELLE, VENMO, etc.).
++ * @param depositUserId The ID of the player making the deposit (used
++ *   for approval tracking when a withdrawal is fully paid).
++ * @param depositUsername The username of the player making the deposit.
++ * @returns An object describing where the deposit should be sent.  If
++ *   matchedWithdrawal is present, send the funds to that player's
++ *   handle; otherwise the payTo field will be empty and callers
++ *   should look up the house handle separately.
++ */
++export async function matchDepositToWithdrawal(
++  amountUsd: number,
++  method: string,
++  depositUserId: string,
++  depositUsername: string
++): Promise<{ payTo: string; payAmount: number; matchedWithdrawal?: { requestId: string; newAmount: number } }> {
++  const open = await getOpenWithdrawalsByMethod(method);
++  if (open.length > 0) {
++    const w = open[0];
++    // Only match if the deposit does not exceed the outstanding withdrawal
++    if (amountUsd <= w.amount) {
++      const newAmount = parseFloat((w.amount - amountUsd).toFixed(2));
++      await reduceWithdrawalAmount(w.request_id, newAmount, depositUserId);
++      return {
++        payTo: w.pay_to,
++        payAmount: amountUsd,
++        matchedWithdrawal: { requestId: w.request_id, newAmount }
++      };
++    }
++  }
++  // Otherwise return empty payTo; caller must choose house handle
++  return { payTo: '', payAmount: amountUsd };
++}
++
+*** End Patch
+*** Update File: src/index.ts
+@@
+-import { ensureSheetHeaders, appendWithdrawalOwner } from './sheets';
++import { ensureSheetHeaders, appendWithdrawalOwner, getOpenWithdrawalsByMethod, matchDepositToWithdrawal, appendDeposit } from './sheets';
+@@
+ const CLIENT_NAME = process.env.CLIENT_NAME || 'paynplay';
++
++// Minimum and maximum allowed buy‑in amounts (inclusive).
++const MIN_BUYIN_AMOUNT = 20;
++const MAX_BUYIN_AMOUNT = 2000;
++
++// Store pending deposit details keyed by deposit ID.  When a player
++// submits a buy‑in and the bot displays a transaction card, we encode the
++// deposit parameters in the callback payload.  Callback payloads are
++// limited in size, so we also keep a temporary cache here to look up
++// deposit details when the loader clicks Mark Paid.
++const pendingDeposits: Record<string, {
++  amount: number;
++  method: string;
++  userId: number;
++  username: string;
++}> = {};
+@@
+ // Custom amount prompt
+ bot.callbackQuery("AMT_CUSTOM", async (ctx: MyContext) => {
+@@
+-    await ctx.editMessageText(`Please enter the amount ($${MIN_BUYIN_AMOUNT}-$${MAX_BUYIN_AMOUNT}):`);
++    await ctx.editMessageText(`Please enter the amount ($${MIN_BUYIN_AMOUNT}-${MAX_BUYIN_AMOUNT}):`);
+@@
+ });
+@@
+ // Handle text for custom amount and withdrawal
+ bot.on("message:text", async (ctx: MyContext) => {
+@@
+-    if (ctx.session.step === "AMOUNT" && ctx.message?.text) {
+-      if (ctx.session.amount && ctx.session.method) {
+-        // old logic for buy in continues...
+-      }
++    if (ctx.session.step === "AMOUNT" && ctx.message?.text) {
++      // Player entering a buy‑in amount
++      const amt = parseFloat(ctx.message.text.replace(/[^0-9.]/g, '') || '0');
++      if (!amt || isNaN(amt)) {
++        await ctx.reply("Please enter a valid number.");
++        return;
++      }
++      if (amt < MIN_BUYIN_AMOUNT || amt > MAX_BUYIN_AMOUNT) {
++        await ctx.reply(`Buy-in must be between $${MIN_BUYIN_AMOUNT} and $${MAX_BUYIN_AMOUNT}.`);
++        return;
++      }
++      // Ensure a method was selected
++      const method = ctx.session.method?.toUpperCase();
++      if (!method) {
++        await ctx.reply("Missing payment method. Please start over with /buyin.");
++        return;
++      }
++      const userId = ctx.from?.id ?? 0;
++      const username = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || ""} ${ctx.from?.last_name || ""}`.trim();
++      // Determine where this deposit should be sent based on outstanding withdrawals.
++      const matchResult = await matchDepositToWithdrawal(amt, method, String(userId), username);
++      const payTo = matchResult.payTo || resolvePayToHandle(method);
++      // Generate a deposit ID and cache details for callback
++      const depositId = `dep_${Date.now()}_${Math.random().toString(36).substr(2,6)}`;
++      pendingDeposits[depositId] = { amount: amt, method, userId, username };
++      const kb = new InlineKeyboard().text("✅ Mark Paid", `MARKPAID_DEP:${depositId}`);
++      await ctx.reply(
++        `Pay $${amt.toFixed(2)} via ${method} to ${payTo}.\n\nThen post your payment screenshot in the group chat. A loader/owner will confirm.`,
++        { reply_markup: kb }
++      );
++      // End buy-in flow for this player
++      delete ctx.session.step;
++      return;
+*** End Patch
+*** End Patch
+*** Begin Patch
+*** Update File: src/index.ts
+@@
+ bot.on("message:text", async (ctx: MyContext) => {
+@@
+   } catch (error) {
+     console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Text message handling failed:`, error);
+     await ctx.reply("Sorry, something went wrong. Please try again.");
+   }
+ });
++
++// Deposit confirmation handler: invoked when a loader clicks the
++// ✅ Mark Paid button on a transaction card.  This will either
++// reduce an existing withdrawal or log the deposit to the Deposits
++// sheet.  Authorization is enforced via LOADER_IDS unless
++// SKIP_ENFORCEMENT=true.
++bot.callbackQuery(/^MARKPAID_DEP:(.+)$/, async (ctx: MyContext) => {
++  try {
++    await ctx.answerCallbackQuery().catch(() => {});
++    const depositId = ctx.match?.[1];
++    if (!depositId) return;
++    const loaderId = ctx.from?.id;
++    if (!loaderId) return;
++    const authorizedIds = (process.env.LOADER_IDS || '').split(',').map(s => s.trim()).filter(Boolean).map(Number);
++    const skipEnforcement = (process.env.SKIP_ENFORCEMENT || '').toLowerCase() === 'true';
++    if (!skipEnforcement && !authorizedIds.includes(loaderId)) {
++      await ctx.reply('You are not authorized to mark deposits as paid.');
++      return;
++    }
++    const depositInfo = pendingDeposits[depositId];
++    if (!depositInfo) {
++      await ctx.reply('Deposit information not found. Please try again.');
++      return;
++    }
++    const { amount, method, userId, username } = depositInfo;
++    delete pendingDeposits[depositId];
++    // Attempt to match this deposit to an open withdrawal and update the sheet
++    const matchResult = await matchDepositToWithdrawal(amount, method, String(loaderId), ctx.from?.username ? '@' + ctx.from.username : String(loaderId));
++    if (!matchResult.matchedWithdrawal) {
++      // No matching withdrawal: log this deposit in Deposits sheet
++      await appendDeposit({
++        deposit_id: depositId,
++        user_id: userId,
++        username,
++        amount_usd: amount,
++        method,
++        pay_to_handle: matchResult.payTo || resolvePayToHandle(method),
++        created_at_iso: new Date().toISOString(),
++        status: 'PAID',
++        notes: `Circle deposit confirmed by ${ctx.from?.username ? '@' + ctx.from.username : loaderId}`
++      });
++    }
++    // Edit the original message to indicate success and remove the button
++    try {
++      const original = ctx.msg?.text || '';
++      await ctx.editMessageText(original + '\n\n✅ Paid');
++    } catch (_) {
++      // ignore edit errors
++    }
++  } catch (error) {
++    console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Deposit mark paid failed:`, error);
++    await ctx.reply('An error occurred while marking the deposit as paid.');
++  }
++});
+*** End Patch
+*** End Patch
