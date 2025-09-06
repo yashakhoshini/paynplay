@@ -1,5 +1,61 @@
-import { getOpenCircleCashoutsCached, updateWithdrawalStatusById } from './sheets.js';
-import { OWNER_FALLBACK_THRESHOLD, MAX_BUYIN_AMOUNT, MIN_BUYIN_AMOUNT } from './config.js';
+import { CONFIG } from './config';
+import { listOpenWithdrawalsByRail, writeDepositStatus, writeWithdrawalProgress, appendLedger, getOpenCircleCashoutsCached, updateWithdrawalStatusById } from './sheets';
+/**
+ * Matching rules:
+ * 1) Rail-strict.
+ * 2) Single-payment constraint: One deposit can fulfill at most one withdrawal (no multi-recipient splits).
+ * 3) Prefer exact-amount match.
+ * 4) Allow partial match ONLY if remainder (withdrawal.amountRequested - amountAllocated) >= MIN_BUY_IN.
+ * 5) Never create a remainder below MIN_BUY_IN.
+ */
+export async function matchDepositToWithdrawal(spreadsheetId, deposit) {
+    if (deposit.status !== 'confirmed')
+        return null;
+    const open = await listOpenWithdrawalsByRail(spreadsheetId, deposit.rail);
+    if (!open.length)
+        return null;
+    // 1) Exact match first (FIFO already ensured by list function)
+    const exact = open.find(w => (w.amountRequested - w.amountFilled) === deposit.amount);
+    if (exact) {
+        await allocate(spreadsheetId, deposit, exact, deposit.amount);
+        return exact;
+    }
+    // 2) Partial only if remainder stays >= MIN_BUY_IN
+    for (const w of open) {
+        const remaining = w.amountRequested - w.amountFilled;
+        if (deposit.amount < remaining) {
+            const remainderAfter = remaining - deposit.amount;
+            if (remainderAfter >= CONFIG.MIN_BUY_IN) {
+                await allocate(spreadsheetId, deposit, w, deposit.amount);
+                return w;
+            }
+        }
+    }
+    // 3) No match allowed under constraints. Leave deposit unmatched.
+    return null;
+}
+async function allocate(spreadsheetId, deposit, w, applyAmount) {
+    const now = Date.now();
+    const newFilled = w.amountFilled + applyAmount;
+    const remaining = w.amountRequested - newFilled;
+    const closing = remaining === 0 ? 'complete' : 'partial';
+    await writeWithdrawalProgress(spreadsheetId, w.id, {
+        amountFilled: newFilled,
+        status: closing,
+        fulfilledBy: 'circle',
+        completedAt: closing === 'complete' ? now : undefined,
+    });
+    // Mark deposit as consumed (single-payment constraint)
+    await writeDepositStatus(spreadsheetId, deposit.id, 'confirmed', deposit.confirmedAt ?? now);
+    await appendLedger(spreadsheetId, [[
+            new Date(now).toISOString(),
+            'circle_match',
+            deposit.id,
+            w.id,
+            w.rail,
+            applyAmount
+        ]]);
+}
 // Rate limiting for Google Sheets API calls
 let lastApiCall = 0;
 const RATE_LIMIT_MS = 1000; // 1 second between calls
@@ -18,11 +74,11 @@ function validateAmount(amount) {
     if (!Number.isFinite(amount) || amount <= 0) {
         return { valid: false, error: 'Amount must be a positive number' };
     }
-    if (amount < MIN_BUYIN_AMOUNT) {
-        return { valid: false, error: `Minimum amount is $${MIN_BUYIN_AMOUNT}` };
+    if (amount < CONFIG.MIN_BUY_IN) {
+        return { valid: false, error: `Minimum amount is $${CONFIG.MIN_BUY_IN}` };
     }
-    if (amount > MAX_BUYIN_AMOUNT) {
-        return { valid: false, error: `Maximum amount is $${MAX_BUYIN_AMOUNT}` };
+    if (amount > CONFIG.MAX_BUY_IN) {
+        return { valid: false, error: `Maximum amount is $${CONFIG.MAX_BUY_IN}` };
     }
     return { valid: true };
 }
@@ -30,7 +86,7 @@ function validateAmount(amount) {
 function normalizeMethod(method) {
     return (method ?? '').trim().toUpperCase();
 }
-export async function findMatch(method, amount, owners, ownerThreshold = OWNER_FALLBACK_THRESHOLD) {
+export async function findMatch(method, amount, owners, ownerThreshold = 300) {
     console.log(`[${new Date().toISOString()}] Looking for match: ${method} $${amount}`);
     // Validate amount first
     const amountValidation = validateAmount(amount);

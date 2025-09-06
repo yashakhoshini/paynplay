@@ -1544,20 +1544,22 @@ async function showBuyinTransactionCard(ctx: MyContext) {
  * Handler for confirming a deposit (non-external rails)
  * After loader verifies the off-platform receipt, we mark deposit as confirmed and attempt matching.
  */
-bot.action(/MARK_PAID_DEPOSIT:(.+)/, async (ctx) => {
-  const depositId = ctx.match[1];
-  const user: User = ctx.state.user;
-
-  // Only loaders/admins can mark paid
-  if (!hasAnyRole(user, CONFIG.PERMITTED_MARK_PAID_ROLES)) {
-    return ctx.answerCbQuery('Not authorized', { show_alert: true });
+bot.callbackQuery(/MARK_PAID_DEPOSIT:(.+)/, async (ctx: MyContext) => {
+  const depositId = ctx.match?.[1];
+  if (!depositId) return;
+  
+  // For now, use the existing authorization logic
+  const fromId = ctx.from?.id;
+  if (!isAuthorizedLoader(fromId)) {
+    return ctx.answerCallbackQuery({ text: 'Not authorized', show_alert: true });
   }
 
   const spreadsheetId = process.env.SHEET_ID!;
-  const deposit: Deposit = ctx.state.loadDeposit(depositId);
-  if (!deposit) {
-    return ctx.answerCbQuery('Deposit not found', { show_alert: true });
-  }
+  // TODO: Implement deposit loading logic
+  // const deposit: Deposit = ctx.state.loadDeposit(depositId);
+  // if (!deposit) {
+  //   return ctx.answerCallbackQuery('Deposit not found', { show_alert: true });
+  // }
 });
 
 // Authorized loaders mark deposit paid → log to Deposits

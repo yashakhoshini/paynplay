@@ -3,7 +3,7 @@ import express from "express";
 import { webhookCallback } from "grammy";
 import { BOT_TOKEN, BASE_URL, PORT, PRIVACY_HINTS_ENABLED, EFFECTIVE_ALLOWED_USER_IDS, MAX_BUYIN_AMOUNT, MIN_BUYIN_AMOUNT, SESSION_TIMEOUT_MS, MAX_MESSAGE_LENGTH, CLIENT_NAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE, METHODS_CIRCLE, METHODS_EXTERNAL_LINK, STRIPE_CHECKOUT_URL, WITHDRAW_STALE_HOURS, FIXED_WALLETS, METHODS_ENABLED_DEFAULT, DEFAULT_CURRENCY, DEFAULT_FAST_FEE, OWNER_FALLBACK_THRESHOLD, OWNER_TG_USERNAME } from "./config.js";
 import { MSG } from "./messages.js";
-import { getSettings, getOwnerAccounts, appendWithdrawalCircle, appendWithdrawalOwner, updateWithdrawalStatusById, appendExternalDeposit, markOwnerPayoutPaid, markStaleCashAppCircleWithdrawals, appendWithdrawalRequest, setWithdrawalStatus, requeueExpiredMatched, appendDeposit } from "./sheets.js";
+import { getSettings, getOwnerAccounts, appendWithdrawalCircle, appendWithdrawalOwner, updateWithdrawalStatusById, appendExternalDeposit, markOwnerPayoutPaid, markStaleCashAppCircleWithdrawals, appendWithdrawalRequest, setWithdrawalStatus, requeueExpiredMatched, appendDeposit, matchDepositToWithdrawal } from "./sheets.js";
 import { findMatch } from "./matcher.js";
 import { SecurityValidator, logSecurityEvent } from "./security.js";
 // ----- LOADER AUTH & GROUP --------------------------------------------------
@@ -189,6 +189,10 @@ function isAuthorized(userId) {
         console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Denied access: user ${userId} not in allowed list ${EFFECTIVE_ALLOWED_USER_IDS.join(',')}`);
     }
     return isAllowed;
+}
+// Utility: check if a user has at least one of the required roles
+function hasAnyRole(user, roles) {
+    return user.roles.some(r => roles.includes(r));
 }
 // Initialize bot function
 function initializeBot() {
@@ -467,11 +471,17 @@ bot.callbackQuery(/AMT_(\d+)/, async (ctx) => {
         await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
     }
 });
+// Store pending deposit details keyed by deposit ID.  When a player
+// submits a buy‑in and the bot displays a transaction card, we encode the
+// deposit parameters in the callback payload.  Callback payloads are
+// limited in size, so we also keep a temporary cache here to look up
+// deposit details when the loader clicks Mark Paid.
+const pendingDeposits = {};
 // Custom amount prompt
 bot.callbackQuery("AMT_CUSTOM", async (ctx) => {
     try {
         await ctx.answerCallbackQuery().catch(() => { });
-        await ctx.editMessageText(`Please enter the amount ($${MIN_BUYIN_AMOUNT}-$${MAX_BUYIN_AMOUNT}):`);
+        await ctx.editMessageText(`Please enter the amount ($${MIN_BUYIN_AMOUNT}-${MAX_BUYIN_AMOUNT}):`);
     }
     catch (error) {
         console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Custom amount prompt failed:`, error);
@@ -800,20 +810,35 @@ bot.callbackQuery(/WITHDRAW_CONFIRM_(.+)/, async (ctx) => {
 bot.on("message:text", async (ctx) => {
     try {
         if (ctx.session.step === "AMOUNT" && ctx.message?.text) {
-            // Rate limiting check
-            const rateLimit = SecurityValidator.checkRateLimit(ctx.from?.id || 0);
-            if (!rateLimit.allowed) {
-                await ctx.reply(`Rate limit exceeded. Please wait ${Math.ceil((rateLimit.resetTime - Date.now()) / 1000)} seconds.`);
+            // Player entering a buy‑in amount
+            const amt = parseFloat(ctx.message.text.replace(/[^0-9.]/g, '') || '0');
+            if (!amt || isNaN(amt)) {
+                await ctx.reply("Please enter a valid number.");
                 return;
             }
-            const validation = SecurityValidator.validateAmount(ctx.message.text);
-            if (!validation.valid) {
-                logSecurityEvent('INVALID_AMOUNT_INPUT', ctx.from?.id, ctx.message.text);
-                await ctx.reply(validation.error);
+            if (amt < MIN_BUYIN_AMOUNT || amt > MAX_BUYIN_AMOUNT) {
+                await ctx.reply(`Buy-in must be between $${MIN_BUYIN_AMOUNT} and $${MAX_BUYIN_AMOUNT}.`);
                 return;
             }
-            ctx.session.amount = validation.value;
-            await handleAmount(ctx);
+            // Ensure a method was selected
+            const method = ctx.session.method?.toUpperCase();
+            if (!method) {
+                await ctx.reply("Missing payment method. Please start over with /buyin.");
+                return;
+            }
+            const userId = ctx.from?.id ?? 0;
+            const username = ctx.from?.username ? `@${ctx.from.username}` : `${ctx.from?.first_name || ""} ${ctx.from?.last_name || ""}`.trim();
+            // Determine where this deposit should be sent based on outstanding withdrawals.
+            const matchResult = await matchDepositToWithdrawal(amt, method, String(userId), username);
+            const payTo = matchResult.payTo || await resolvePayToHandle(method);
+            // Generate a deposit ID and cache details for callback
+            const depositId = `dep_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+            pendingDeposits[depositId] = { amount: amt, method, userId, username };
+            const kb = new InlineKeyboard().text("✅ Mark Paid", `MARKPAID_DEP:${depositId}`);
+            await ctx.reply(`Pay $${amt.toFixed(2)} via ${method} to ${payTo}.\n\nThen post your payment screenshot in the group chat. A loader/owner will confirm.`, { reply_markup: kb });
+            // End buy-in flow for this player
+            delete ctx.session.step;
+            return;
         }
         else if (ctx.session.step === "WITHDRAW_AMOUNT" && ctx.message?.text) {
             // Rate limiting check
@@ -1370,6 +1395,26 @@ async function showBuyinTransactionCard(ctx) {
     const kb = new InlineKeyboard().text('✅ Mark Paid', `MARKPAID_DEP:${depositId}:${ctx.from.id}:${cents}:${method}`);
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: kb });
 }
+/**
+ * Handler for confirming a deposit (non-external rails)
+ * After loader verifies the off-platform receipt, we mark deposit as confirmed and attempt matching.
+ */
+bot.callbackQuery(/MARK_PAID_DEPOSIT:(.+)/, async (ctx) => {
+    const depositId = ctx.match?.[1];
+    if (!depositId)
+        return;
+    // For now, use the existing authorization logic
+    const fromId = ctx.from?.id;
+    if (!isAuthorizedLoader(fromId)) {
+        return ctx.answerCallbackQuery({ text: 'Not authorized', show_alert: true });
+    }
+    const spreadsheetId = process.env.SHEET_ID;
+    // TODO: Implement deposit loading logic
+    // const deposit: Deposit = ctx.state.loadDeposit(depositId);
+    // if (!deposit) {
+    //   return ctx.answerCallbackQuery('Deposit not found', { show_alert: true });
+    // }
+});
 // Authorized loaders mark deposit paid → log to Deposits
 bot.callbackQuery(/^MARKPAID_DEP:([^:]+):(\d+):(\d+):([^:]+)$/, async (ctx) => {
     try {
@@ -1419,6 +1464,63 @@ bot.callbackQuery('EXTERNAL_DEPOSIT_LOG', async (ctx) => {
     catch (error) {
         console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] External deposit log setup failed:`, error);
         await ctx.answerCallbackQuery({ text: "Sorry, something went wrong. Please try again.", show_alert: true });
+    }
+});
+// Deposit confirmation handler: invoked when a loader clicks the
+// ✅ Mark Paid button on a transaction card.  This will either
+// reduce an existing withdrawal or log the deposit to the Deposits
+// sheet.  Authorization is enforced via LOADER_IDS unless
+// SKIP_ENFORCEMENT=true.
+bot.callbackQuery(/^MARKPAID_DEP:(.+)$/, async (ctx) => {
+    try {
+        await ctx.answerCallbackQuery().catch(() => { });
+        const depositId = ctx.match?.[1];
+        if (!depositId)
+            return;
+        const loaderId = ctx.from?.id;
+        if (!loaderId)
+            return;
+        const authorizedIds = (process.env.LOADER_IDS || '').split(',').map(s => s.trim()).filter(Boolean).map(Number);
+        const skipEnforcement = (process.env.SKIP_ENFORCEMENT || '').toLowerCase() === 'true';
+        if (!skipEnforcement && !authorizedIds.includes(loaderId)) {
+            await ctx.reply('You are not authorized to mark deposits as paid.');
+            return;
+        }
+        const depositInfo = pendingDeposits[depositId];
+        if (!depositInfo) {
+            await ctx.reply('Deposit information not found. Please try again.');
+            return;
+        }
+        const { amount, method, userId, username } = depositInfo;
+        delete pendingDeposits[depositId];
+        // Attempt to match this deposit to an open withdrawal and update the sheet
+        const matchResult = await matchDepositToWithdrawal(amount, method, String(loaderId), ctx.from?.username ? '@' + ctx.from.username : String(loaderId));
+        if (!matchResult.matchedWithdrawal) {
+            // No matching withdrawal: log this deposit in Deposits sheet
+            await appendDeposit({
+                deposit_id: depositId,
+                user_id: userId,
+                username,
+                amount_usd: amount,
+                method,
+                pay_to_handle: matchResult.payTo || await resolvePayToHandle(method),
+                created_at_iso: new Date().toISOString(),
+                status: 'PAID',
+                notes: `Circle deposit confirmed by ${ctx.from?.username ? '@' + ctx.from.username : loaderId}`
+            });
+        }
+        // Edit the original message to indicate success and remove the button
+        try {
+            const original = ctx.msg?.text || '';
+            await ctx.editMessageText(original + '\n\n✅ Paid');
+        }
+        catch (_) {
+            // ignore edit errors
+        }
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}] [${CLIENT_NAME}] Deposit mark paid failed:`, error);
+        await ctx.reply('An error occurred while marking the deposit as paid.');
     }
 });
 // Owner payout confirmation - disabled until new implementation

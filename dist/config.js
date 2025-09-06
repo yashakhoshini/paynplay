@@ -58,6 +58,21 @@ export const METHODS_EXTERNAL_LINK = (process.env.METHODS_EXTERNAL_LINK || 'PAYP
     .split(',')
     .map(s => s.trim().toUpperCase())
     .filter(Boolean);
+export const CONFIG = {
+    // Financial guardrails
+    MIN_BUY_IN: 20, // smallest allowed single transaction
+    MAX_BUY_IN: 2000, // largest allowed single transaction
+    // SLA for withdrawals (ms)
+    WITHDRAWAL_SLA_MS: 24 * 60 * 60 * 1000,
+    roles: {
+        PLAYER: 'player',
+        LOADER: 'loader',
+        ADMIN: 'admin',
+    },
+    // Telegram permissions
+    // If you gate buttons/actions, list role names that can click them
+    PERMITTED_MARK_PAID_ROLES: ['loader', 'admin'],
+};
 // Club Settings
 export const MIN_BUYIN_AMOUNT = Number(process.env.MIN_BUYIN_AMOUNT) || 20;
 export const MAX_BUYIN_AMOUNT = Number(process.env.MAX_BUYIN_AMOUNT) || 2000;
