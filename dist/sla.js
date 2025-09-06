@@ -1,5 +1,5 @@
-import { CONFIG } from './config';
-import { listOpenWithdrawalsByRail, markWithdrawalTreasuryPaid } from './sheets';
+import { CONFIG } from './config.js';
+import { listOpenWithdrawalsByRail, markWithdrawalTreasuryPaid } from './sheets.js';
 /**
  * Sweep all rails for withdrawals older than the 24h SLA and mark them as treasury paid.
  * Call this on a schedule (e.g., setInterval or a cron runner).

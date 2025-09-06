@@ -1,5 +1,5 @@
-import { CONFIG } from './config';
-import { listOpenWithdrawalsByRail, writeDepositStatus, writeWithdrawalProgress, appendLedger, getOpenCircleCashoutsCached, updateWithdrawalStatusById } from './sheets';
+import { CONFIG } from './config.js';
+import { listOpenWithdrawalsByRail, writeDepositStatus, writeWithdrawalProgress, appendLedger, getOpenCircleCashoutsCached, updateWithdrawalStatusById } from './sheets.js';
 /**
  * Matching rules:
  * 1) Rail-strict.

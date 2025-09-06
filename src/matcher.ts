@@ -1,6 +1,6 @@
-import { CONFIG } from './config';
-import { listOpenWithdrawalsByRail, writeDepositStatus, writeWithdrawalProgress, appendLedger, getOpenCircleCashoutsCached, updateWithdrawalStatusById } from './sheets';
-import type { Deposit, Withdrawal, MatchResult, OwnerAccount, Method, EnhancedMatchResult } from './types';
+import { CONFIG } from './config.js';
+import { listOpenWithdrawalsByRail, writeDepositStatus, writeWithdrawalProgress, appendLedger, getOpenCircleCashoutsCached, updateWithdrawalStatusById } from './sheets.js';
+import type { Deposit, Withdrawal, MatchResult, OwnerAccount, Method, EnhancedMatchResult } from './types.js';
 
 /**
  * Matching rules:
