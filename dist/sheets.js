@@ -1,6 +1,6 @@
 import { google } from 'googleapis';
 import { getClient } from './googleClient.js';
-import { SHEET_ID, METHODS_ENABLED_DEFAULT, DEFAULT_CURRENCY, DEFAULT_FAST_FEE, OWNER_FALLBACK_THRESHOLD, OWNER_TG_USERNAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE, SHEETS_RATE_LIMIT_MS, CLIENT_NAME, METHODS_CIRCLE, METHODS_EXTERNAL_LINK, STRIPE_CHECKOUT_URL, WITHDRAW_STALE_HOURS, APPLE_PAY_HANDLE, PAYPAL_EMAIL, CRYPTO_WALLET_BTC, CRYPTO_WALLET_ETH, CRYPTO_WALLET, CRYPTO_NETWORKS } from './config.js';
+import { SHEET_ID, METHODS_ENABLED_DEFAULT, DEFAULT_CURRENCY, DEFAULT_FAST_FEE, OWNER_FALLBACK_THRESHOLD, OWNER_TG_USERNAME, ZELLE_HANDLE, VENMO_HANDLE, CASHAPP_HANDLE, PAYPAL_HANDLE, SHEETS_RATE_LIMIT_MS, CLIENT_NAME, METHODS_CIRCLE, METHODS_EXTERNAL_LINK, STRIPE_CHECKOUT_URL, WITHDRAW_STALE_HOURS, APPLE_PAY_HANDLE, PAYPAL_EMAIL, CRYPTO_WALLET_BTC, CRYPTO_WALLET_ETH, CRYPTO_WALLET, CRYPTO_NETWORKS_RAW } from './config.js';
 export async function appendWithdrawalRequest(row) {
     const svc = await getSheetsClient();
     // Ensure 12-column header exists (A-L). We also support optional M,N for matching window/owner fulfill.
@@ -259,7 +259,7 @@ export async function getSettingsCached() {
                     CRYPTO_WALLET_BTC: map.get('CRYPTO_WALLET_BTC') || CRYPTO_WALLET_BTC,
                     CRYPTO_WALLET_ETH: map.get('CRYPTO_WALLET_ETH') || CRYPTO_WALLET_ETH,
                     CRYPTO_WALLET: map.get('CRYPTO_WALLET') || CRYPTO_WALLET,
-                    CRYPTO_NETWORKS: (map.get('CRYPTO_NETWORKS') || CRYPTO_NETWORKS).split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+                    CRYPTO_NETWORKS: (map.get('CRYPTO_NETWORKS') || CRYPTO_NETWORKS_RAW).split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
                 };
                 // Cache the result
                 settingsCache = { data: settings, timestamp: now };
@@ -290,7 +290,7 @@ export async function getSettingsCached() {
             CRYPTO_WALLET_BTC: CRYPTO_WALLET_BTC,
             CRYPTO_WALLET_ETH: CRYPTO_WALLET_ETH,
             CRYPTO_WALLET: CRYPTO_WALLET,
-            CRYPTO_NETWORKS: CRYPTO_NETWORKS.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+            CRYPTO_NETWORKS: CRYPTO_NETWORKS_RAW.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
         };
         // Cache the result even for fallback
         settingsCache = { data: settings, timestamp: now };

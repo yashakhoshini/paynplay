@@ -1,6 +1,18 @@
 import { CONFIG } from './config.js';
-import { listOpenWithdrawalsByRail, writeDepositStatus, writeWithdrawalProgress, appendLedger, getOpenCircleCashoutsCached, updateWithdrawalStatusById } from './sheets.js';
-import type { Deposit, Withdrawal, MatchResult, OwnerAccount, Method, EnhancedMatchResult } from './types.js';
+import {
+  listOpenWithdrawalsByRail,
+  writeDepositStatus,
+  writeWithdrawalProgress,
+  appendLedger,
+  getOpenCircleCashoutsCached,
+  updateWithdrawalStatusById,
+} from './sheets.js';
+import type {
+  Deposit,
+  Withdrawal,
+  OwnerAccount,
+  EnhancedMatchResult,
+} from './types.js';
 
 /**
  * Matching rules:
@@ -10,14 +22,19 @@ import type { Deposit, Withdrawal, MatchResult, OwnerAccount, Method, EnhancedMa
  * 4) Allow partial match ONLY if remainder (withdrawal.amountRequested - amountAllocated) >= MIN_BUY_IN.
  * 5) Never create a remainder below MIN_BUY_IN.
  */
-export async function matchDepositToWithdrawal(spreadsheetId: string, deposit: Deposit): Promise<Withdrawal | null> {
+export async function matchDepositToWithdrawalNew(
+  spreadsheetId: string,
+  deposit: Deposit
+): Promise<Withdrawal | null> {
   if (deposit.status !== 'confirmed') return null;
 
   const open = await listOpenWithdrawalsByRail(spreadsheetId, deposit.rail);
   if (!open.length) return null;
 
-  // 1) Exact match first (FIFO already ensured by list function)
-  const exact = open.find(w => (w.amountRequested - w.amountFilled) === deposit.amount);
+  // 1) Exact match first (FIFO ensured by list function)
+  const exact = open.find(
+    (w) => w.amountRequested - w.amountFilled === deposit.amount
+  );
   if (exact) {
     await allocate(spreadsheetId, deposit, exact, deposit.amount);
     return exact;
@@ -39,197 +56,251 @@ export async function matchDepositToWithdrawal(spreadsheetId: string, deposit: D
   return null;
 }
 
-async function allocate(spreadsheetId: string, deposit: Deposit, w: Withdrawal, applyAmount: number) {
+async function allocate(
+  spreadsheetId: string,
+  deposit: Deposit,
+  w: Withdrawal,
+  applyAmount: number
+) {
   const now = Date.now();
   const newFilled = w.amountFilled + applyAmount;
   const remaining = w.amountRequested - newFilled;
-  const closing = remaining === 0 ? 'complete' : 'partial';
+  const closing: 'complete' | 'partial' = remaining === 0 ? 'complete' : 'partial';
 
   await writeWithdrawalProgress(spreadsheetId, w.id, {
     amountFilled: newFilled,
-    status: closing as any,
+    status: closing as any, // cast to match your sheet’s expected enum/string
     fulfilledBy: 'circle',
     completedAt: closing === 'complete' ? now : undefined,
   });
 
-  // Mark deposit as consumed (single-payment constraint)
-  await writeDepositStatus(spreadsheetId, deposit.id, 'confirmed', deposit.confirmedAt ?? now);
-
-  await appendLedger(spreadsheetId, [[
-    new Date(now).toISOString(),
-    'circle_match',
+  // Mark deposit as "consumed" — if your schema supports a distinct status (e.g., "applied"),
+  // prefer that instead of re-setting "confirmed".
+  await writeDepositStatus(
+    spreadsheetId,
     deposit.id,
-    w.id,
-    w.rail,
-    applyAmount
-  ]]);
+    'confirmed',
+    deposit.confirmedAt ?? now
+  );
+
+  await appendLedger(spreadsheetId, [
+    [
+      new Date(now).toISOString(),
+      'circle_match',
+      deposit.id,
+      w.id,
+      w.rail,
+      applyAmount,
+    ],
+  ]);
 }
 
+// ----------------------------------------------------------------------------
 // Rate limiting for Google Sheets API calls
+// ----------------------------------------------------------------------------
 let lastApiCall = 0;
 const RATE_LIMIT_MS = 1000; // 1 second between calls
 
 async function rateLimitedApiCall<T>(apiCall: () => Promise<T>): Promise<T> {
   const now = Date.now();
   const timeSinceLastCall = now - lastApiCall;
-  
+
   if (timeSinceLastCall < RATE_LIMIT_MS) {
     const delay = RATE_LIMIT_MS - timeSinceLastCall;
-    await new Promise(resolve => setTimeout(resolve, delay));
+    await new Promise((resolve) => setTimeout(resolve, delay));
   }
-  
+
   lastApiCall = Date.now();
   return apiCall();
 }
 
-// Validate amount with security limits
+// ----------------------------------------------------------------------------
+// Validation / helpers
+// ----------------------------------------------------------------------------
 function validateAmount(amount: number): { valid: boolean; error?: string } {
   if (!Number.isFinite(amount) || amount <= 0) {
     return { valid: false, error: 'Amount must be a positive number' };
   }
-  
   if (amount < CONFIG.MIN_BUY_IN) {
     return { valid: false, error: `Minimum amount is $${CONFIG.MIN_BUY_IN}` };
   }
-  
   if (amount > CONFIG.MAX_BUY_IN) {
     return { valid: false, error: `Maximum amount is $${CONFIG.MAX_BUY_IN}` };
   }
-  
   return { valid: true };
 }
 
-// Normalize method names with null/undefined safety
 function normalizeMethod(method: string): string {
   return (method ?? '').trim().toUpperCase();
 }
 
+// ----------------------------------------------------------------------------
+// Matching entry point for live buy-ins (circle-first, then owner fallback)
+// ----------------------------------------------------------------------------
 export async function findMatch(
   method: string,
   amount: number,
   owners: OwnerAccount[],
-  ownerThreshold: number = 300
+  _ownerThreshold: number = 300 // kept for signature compatibility
 ): Promise<EnhancedMatchResult> {
+  console.log(
+    `[${new Date().toISOString()}] Looking for match: ${method} $${amount}`
+  );
 
-  console.log(`[${new Date().toISOString()}] Looking for match: ${method} $${amount}`);
-  
   // Validate amount first
   const amountValidation = validateAmount(amount);
   if (!amountValidation.valid) {
-    console.error(`[${new Date().toISOString()}] Amount validation failed: ${amountValidation.error}`);
+    console.error(
+      `[${new Date().toISOString()}] Amount validation failed: ${amountValidation.error}`
+    );
     throw new Error(amountValidation.error);
   }
-  
+
   // Validate method
   if (!method || typeof method !== 'string') {
-    console.error(`[${new Date().toISOString()}] Invalid payment method provided`);
+    console.error(
+      `[${new Date().toISOString()}] Invalid payment method provided`
+    );
     throw new Error('Invalid payment method');
   }
-  
+
   // Validate owners array
   if (!Array.isArray(owners)) {
-    console.error(`[${new Date().toISOString()}] Invalid owners array provided`);
+    console.error(
+      `[${new Date().toISOString()}] Invalid owners array provided`
+    );
     throw new Error('Invalid owners configuration');
   }
-  
-  // Normalize method for comparison
+
   const normalizedMethod = normalizeMethod(method);
-  
-  // Check if this is a circle method - get from settings if available
+
+  // Determine if this is a "circle" method
   let isCircleMethod = false;
-  
   try {
-    const { getSettingsCached } = await import('./sheets.js');
-    const settings = await getSettingsCached();
-    isCircleMethod = settings.METHODS_CIRCLE.includes(normalizedMethod);
-  } catch (error) {
-    // Use env defaults if settings unavailable
-    const { METHODS_CIRCLE } = await import('./config.js');
-    isCircleMethod = METHODS_CIRCLE.includes(normalizedMethod);
-    console.log(`[${new Date().toISOString()}] Using env METHODS_CIRCLE defaults`);
+    // Optional helper; if missing or mis-shaped we’ll fall back.
+    const mod: any = await import('./sheets.js');
+    const getSettingsCached = mod?.getSettingsCached;
+    if (typeof getSettingsCached === 'function') {
+      const settings = await getSettingsCached();
+      const arr = Array.isArray(settings?.METHODS_CIRCLE)
+        ? settings.METHODS_CIRCLE
+        : [];
+      isCircleMethod = arr.map(normalizeMethod).includes(normalizedMethod);
+    } else {
+      throw new Error('getSettingsCached not available');
+    }
+  } catch {
+    // Fallback to env defaults
+    const cfg: any = await import('./config.js');
+    const arr = Array.isArray(cfg?.METHODS_CIRCLE) ? cfg.METHODS_CIRCLE : [];
+    isCircleMethod = arr.map(normalizeMethod).includes(normalizedMethod);
+    console.log(
+      `[${new Date().toISOString()}] Using env METHODS_CIRCLE defaults`
+    );
   }
-  
+
   if (isCircleMethod) {
-    // Use new circle matching logic
-    console.log(`[${new Date().toISOString()}] Using circle matching for method: ${normalizedMethod}`);
-    
+    console.log(
+      `[${new Date().toISOString()}] Using circle matching for method: ${normalizedMethod}`
+    );
     try {
       const circleWithdrawals = await getOpenCircleCashoutsCached();
-      
-      // Filter by method with normalized comparison
-      const matchingWithdrawals = circleWithdrawals.filter(w => 
-        normalizeMethod(w.method) === normalizedMethod
+      const matchingWithdrawals = circleWithdrawals.filter(
+        (w: any) => normalizeMethod(w.method) === normalizedMethod
       );
-      console.log(`[${new Date().toISOString()}] Circle withdrawals matching method ${normalizedMethod}: ${matchingWithdrawals.length}`);
-      
+      console.log(
+        `[${new Date().toISOString()}] Circle withdrawals matching method ${normalizedMethod}: ${matchingWithdrawals.length}`
+      );
+
       if (matchingWithdrawals.length > 0) {
-        // Take the oldest withdrawal (already sorted by request_timestamp_iso ASC)
+        // Oldest first (assumes pre-sorted asc by request_timestamp_iso)
         const oldestWithdrawal = matchingWithdrawals[0];
-        console.log(`[${new Date().toISOString()}] Matched with oldest circle withdrawal: ${oldestWithdrawal.request_id}`);
-        
-        // Atomic claim: re-read the row to ensure it's still QUEUED before updating
+
+        // NOTE: handle both {amount_usd} and {amount}
+        const amountUsd: number =
+          Number((oldestWithdrawal as any).amount_usd) || Number((oldestWithdrawal as any).amount) || 0;
+
         try {
-          // Mark the withdrawal as MATCHED (not PAID)
-          await rateLimitedApiCall(() => 
-            updateWithdrawalStatusById(oldestWithdrawal.request_id, 'MATCHED', 'Matched with deposit')
+          // Best-effort atomic claim — ideally your sheet function enforces state transitions
+          await rateLimitedApiCall(() =>
+            updateWithdrawalStatusById(
+              oldestWithdrawal.request_id,
+              'MATCHED',
+              'Matched with deposit'
+            )
           );
-          console.log(`[${new Date().toISOString()}] Successfully marked circle withdrawal ${oldestWithdrawal.request_id} as MATCHED`);
-          
+          console.log(
+            `[${new Date().toISOString()}] Successfully marked circle withdrawal ${oldestWithdrawal.request_id} as MATCHED`
+          );
+
           return {
             type: 'CASHOUT',
-            amount: oldestWithdrawal.amount,
+            amount: amountUsd,
             method: oldestWithdrawal.method,
             request_id: oldestWithdrawal.request_id,
-            receiver: oldestWithdrawal.payment_tag_or_address
+            receiver: oldestWithdrawal.payment_tag_or_address,
           };
         } catch (error) {
-          console.error(`[${new Date().toISOString()}] Failed to mark circle withdrawal as matched:`, error);
+          console.error(
+            `[${new Date().toISOString()}] Failed to mark circle withdrawal as matched:`,
+            error
+          );
           // Continue to owner fallback
         }
       }
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] Circle matching failed:`, error);
+      console.error(
+        `[${new Date().toISOString()}] Circle matching failed:`,
+        error
+      );
       // Continue to owner fallback
     }
   }
-  
-  // Fallback to owner routing for non-circle methods or when circle matching fails
-  console.log(`[${new Date().toISOString()}] Using owner routing for method: ${normalizedMethod}`);
-  
-  // Find matching owner with normalized comparison
-  const owner = owners.find(o => normalizeMethod(o.method) === normalizedMethod);
+
+  // Owner fallback
+  console.log(
+    `[${new Date().toISOString()}] Using owner routing for method: ${normalizedMethod}`
+  );
+  const owner = owners.find(
+    (o) => normalizeMethod(o.method) === normalizedMethod
+  );
   if (owner) {
-    console.log(`[${new Date().toISOString()}] Routing to owner: ${owner.handle}`);
-    return { 
-      type: 'OWNER', 
-      method: owner.method, 
-      amount, 
-      owner 
+    console.log(
+      `[${new Date().toISOString()}] Routing to owner: ${owner.handle}`
+    );
+    return {
+      type: 'OWNER',
+      method: owner.method,
+      amount,
+      owner,
     };
   }
-  
-  // Fallback to any available owner
+
   if (owners.length > 0) {
-    console.log(`[${new Date().toISOString()}] No matching method owner found, using first available owner`);
-    return { 
-      type: 'OWNER', 
-      method: owners[0].method, 
-      amount, 
-      owner: owners[0] 
+    console.log(
+      `[${new Date().toISOString()}] No matching method owner found, using first available owner`
+    );
+    return {
+      type: 'OWNER',
+      method: owners[0].method,
+      amount,
+      owner: owners[0],
     };
   }
-  
-  // If truly no owner handle is present, return dummy owner
-  console.warn(`[${new Date().toISOString()}] No owner handles configured for method ${normalizedMethod}`);
-  return { 
-    type: 'OWNER', 
-    method, 
-    amount, 
-    owner: { 
-      method, 
-      handle: '<ask owner for handle>', 
-      display_name: 'Owner', 
-      instructions: '' 
-    }
+
+  // No owners configured — return a safe dummy
+  console.warn(
+    `[${new Date().toISOString()}] No owner handles configured for method ${normalizedMethod}`
+  );
+  return {
+    type: 'OWNER',
+    method,
+    amount,
+    owner: {
+      method,
+      handle: '<ask owner for handle>',
+      display_name: 'Owner',
+      instructions: '',
+    },
   };
 }

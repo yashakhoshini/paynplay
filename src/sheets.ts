@@ -19,7 +19,7 @@ import {
   CRYPTO_WALLET_BTC,
   CRYPTO_WALLET_ETH,
   CRYPTO_WALLET,
-  CRYPTO_NETWORKS
+  CRYPTO_NETWORKS_RAW
 } from './config.js';
 import { OwnerAccount, UserRole, Settings, Deposit, Withdrawal } from './types.js';
 
@@ -344,7 +344,7 @@ export async function getSettingsCached(): Promise<Settings> {
           CRYPTO_WALLET_BTC: map.get('CRYPTO_WALLET_BTC') || CRYPTO_WALLET_BTC,
           CRYPTO_WALLET_ETH: map.get('CRYPTO_WALLET_ETH') || CRYPTO_WALLET_ETH,
           CRYPTO_WALLET: map.get('CRYPTO_WALLET') || CRYPTO_WALLET,
-          CRYPTO_NETWORKS: (map.get('CRYPTO_NETWORKS') || CRYPTO_NETWORKS).split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+          CRYPTO_NETWORKS: (map.get('CRYPTO_NETWORKS') || CRYPTO_NETWORKS_RAW).split(',').map((s: string) => s.trim().toUpperCase()).filter(Boolean)
         };
         
         // Cache the result
@@ -376,7 +376,7 @@ export async function getSettingsCached(): Promise<Settings> {
       CRYPTO_WALLET_BTC: CRYPTO_WALLET_BTC,
       CRYPTO_WALLET_ETH: CRYPTO_WALLET_ETH,
       CRYPTO_WALLET: CRYPTO_WALLET,
-      CRYPTO_NETWORKS: CRYPTO_NETWORKS.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+      CRYPTO_NETWORKS: CRYPTO_NETWORKS_RAW.split(',').map((s: string) => s.trim().toUpperCase()).filter(Boolean)
     };
     
     // Cache the result even for fallback
