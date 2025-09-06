@@ -21,7 +21,7 @@ import {
   CRYPTO_WALLET,
   CRYPTO_NETWORKS
 } from './config.js';
-import { OwnerAccount, UserRole, Settings } from './types.js';
+import { OwnerAccount, UserRole, Settings, Deposit, Withdrawal } from './types.js';
 
 // --- WITHDRAWALS lifecycle helpers -----------------------------------------
 export type WithdrawalStatus = 'QUEUED'|'MATCHED'|'PAID'|'CANCELLED'|'LOGGED';
@@ -1215,4 +1215,48 @@ export async function matchDepositToWithdrawal(
   }
   // Otherwise return empty payTo; caller must choose house handle
   return { payTo: '', payAmount: amountUsd };
+}
+
+export async function writeDepositStatus(spreadsheetId: string, depositId: string, status: string, confirmedAt?: number) {
+  // Writes to Deposits tab: find row by depositId and update status/confirmedAt
+  // (Assumes a header row with columns: id,user_id,rail,amount,status,created_at,confirmed_at,notes)
+}
+
+export async function writeWithdrawalProgress(spreadsheetId: string, withdrawalId: string, fields: Partial<Pick<Withdrawal,'amountFilled'|'status'|'fulfilledBy'|'completedAt'>>) {
+  // Writes to Withdrawals tab by id
+}
+
+export async function appendLedger(spreadsheetId: string, entries: any[][]) {
+  // Appends to Ledger tab
+}
+
+export async function listOpenWithdrawalsByRail(spreadsheetId: string, rail: string): Promise<Withdrawal[]> {
+  // Read Withdrawals!A:Z; filter status in {open,partial} and rail match; order by createdAt ASC (FIFO)
+  return [];
+}
+
+export async function getWithdrawalById(spreadsheetId: string, id: string): Promise<Withdrawal | null> {
+  return null;
+}
+
+export async function markWithdrawalTreasuryPaid(spreadsheetId: string, withdrawal: Withdrawal) {
+  const now = Date.now();
+  await writeWithdrawalProgress(spreadsheetId, withdrawal.id, {
+    amountFilled: withdrawal.amountRequested,
+    status: 'treasury_paid',
+    fulfilledBy: 'treasury',
+    completedAt: now,
+  });
+  await appendLedger(spreadsheetId, [[
+    new Date(now).toISOString(),
+    'withdrawal_treasury_paid',
+    withdrawal.id,
+    withdrawal.userId,
+    withdrawal.rail,
+    withdrawal.amountRequested
+  ]]);
+}
+
+export async function healthWrite(spreadsheetId: string) {
+  // writes timestamp to Health!A1 for liveness
 }

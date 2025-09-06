@@ -127,3 +127,31 @@ export interface WithdrawalRequest {
   approvedAtISO?: string;
   status?: string;
 }
+
+export interface Deposit {
+  id: string;
+  userId: string;
+  rail: string;        // e.g. 'zelle' | 'cashapp' | 'external'
+  amount: number;
+  status: 'initiated' | 'paid' | 'confirmed';
+  createdAt: number;
+  confirmedAt?: number;
+}
+
+export interface Withdrawal {
+  id: string;
+  userId: string;
+  rail: string;
+  amountRequested: number;
+  amountFilled: number;
+  status: 'open' | 'partial' | 'complete' | 'treasury_paid';
+  fulfilledBy?: 'circle' | 'treasury';
+  createdAt: number;
+  completedAt?: number;
+}
+
+export interface User {
+  id: string;
+  telegramId: number;
+  roles: string[]; // 'player' | 'loader' | 'admin'
+}

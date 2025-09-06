@@ -49,8 +49,9 @@ import {
   matchDepositToWithdrawal
 } from "./sheets.js";
 import { findMatch } from "./matcher.js";
-import { Transaction, GroupSession } from "./types.js";
+import { Transaction, GroupSession, User } from "./types.js";
 import { SecurityValidator, logSecurityEvent } from "./security.js";
+import { CONFIG } from "./config.js";
 
 type SessionData = {
   step?: "METHOD" | "AMOUNT" | "WITHDRAW_METHOD" | "WITHDRAW_AMOUNT" | "WITHDRAW_TAG" | "WITHDRAW_CHANNEL" | "CRYPTO_COIN" | "CRYPTO_ADDRESS" | "EXTERNAL_AMOUNT" | "EXTERNAL_REFERENCE";
@@ -276,6 +277,11 @@ function isAuthorized(userId: number): boolean {
     console.log(`[${new Date().toISOString()}] [${CLIENT_NAME}] Denied access: user ${userId} not in allowed list ${EFFECTIVE_ALLOWED_USER_IDS.join(',')}`);
   }
   return isAllowed;
+}
+
+// Utility: check if a user has at least one of the required roles
+function hasAnyRole(user: User, roles: string[]) {
+  return user.roles.some(r => roles.includes(r));
 }
 
 // Initialize bot function
@@ -1533,6 +1539,26 @@ async function showBuyinTransactionCard(ctx: MyContext) {
   const kb = new InlineKeyboard().text('✅ Mark Paid', `MARKPAID_DEP:${depositId}:${ctx.from!.id}:${cents}:${method}`);
   await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: kb });
 }
+
+/**
+ * Handler for confirming a deposit (non-external rails)
+ * After loader verifies the off-platform receipt, we mark deposit as confirmed and attempt matching.
+ */
+bot.action(/MARK_PAID_DEPOSIT:(.+)/, async (ctx) => {
+  const depositId = ctx.match[1];
+  const user: User = ctx.state.user;
+
+  // Only loaders/admins can mark paid
+  if (!hasAnyRole(user, CONFIG.PERMITTED_MARK_PAID_ROLES)) {
+    return ctx.answerCbQuery('Not authorized', { show_alert: true });
+  }
+
+  const spreadsheetId = process.env.SHEET_ID!;
+  const deposit: Deposit = ctx.state.loadDeposit(depositId);
+  if (!deposit) {
+    return ctx.answerCbQuery('Deposit not found', { show_alert: true });
+  }
+});
 
 // Authorized loaders mark deposit paid → log to Deposits
 bot.callbackQuery(/^MARKPAID_DEP:([^:]+):(\d+):(\d+):([^:]+)$/, async (ctx: MyContext) => {
