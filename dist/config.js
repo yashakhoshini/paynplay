@@ -64,6 +64,8 @@ export const CONFIG = {
     MAX_BUY_IN: 2000, // largest allowed single transaction
     // SLA for withdrawals (ms)
     WITHDRAWAL_SLA_MS: 24 * 60 * 60 * 1000,
+    // Pending token TTL for external "log after paid" (ms)
+    PENDING_TTL_MS: 30 * 60 * 1000,
     roles: {
         PLAYER: 'player',
         LOADER: 'loader',
